@@ -1,0 +1,1374 @@
+"""
+================================================================================
+Bitget Futures 자동매매 봇 v3.2 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+================================================================================
+- 신호 데이터: Binance 공개 API (API 키 불필요)
+- 매매 실행: Bitget API (헤지 모드)
+- 지정가 5회 실패 시 시장가 전환
+- 텔레그램 실시간 알림
+- [v3.2] 자금 배분 로직 개선: 가용 잔고 기반 동적 계산
+================================================================================
+"""
+
+import requests
+import hmac
+import hashlib
+import base64
+import time
+import json
+import pandas as pd
+import numpy as np
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Dict, List, Tuple
+import logging
+import os
+from dotenv import load_dotenv
+
+# .env 파일 로드
+load_dotenv()
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 트레이딩 설정
+# ═══════════════════════════════════════════════════════════════════════════════
+
+TRADING_CONFIGS = [
+    {
+        'enabled': True,
+        'symbol': 'BTCUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 248,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 46,
+        'stoch_k_smooth': 37,
+        'stoch_d_period': 4,
+        'leverage_up': 4,
+        'leverage_down': 0,
+        'tick_size': 0.1,
+        'size_decimals': 4,
+        'allocation_pct': 33.3,
+        'position_size_pct': 95,
+        'description': 'BTC MA248 + Stoch(46,37,4) Lev 4x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'ETHUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 152,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 58,
+        'stoch_k_smooth': 23,
+        'stoch_d_period': 18,
+        'leverage_up': 4,
+        'leverage_down': 0,
+        'tick_size': 0.01,
+        'size_decimals': 2,
+        'allocation_pct': 33.3,
+        'position_size_pct': 95,
+        'description': 'ETH MA152 + Stoch(58,23,18) Lev 4x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'SOLUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 64,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 51,
+        'stoch_k_smooth': 20,
+        'stoch_d_period': 16,
+        'leverage_up': 2,
+        'leverage_down': 0,
+        'tick_size': 0.001,
+        'size_decimals': 1,
+        'allocation_pct': 33.3,
+        'position_size_pct': 95,
+        'description': 'SOL MA64 + Stoch(51,20,16) Lev 2x/Cash'
+    },
+]
+
+# 주문 설정
+LIMIT_ORDER_TICKS = 1
+ORDER_WAIT_SECONDS = 5
+MAX_LIMIT_RETRY = 5
+RETRY_DELAY_SECONDS = 1
+
+# API 설정 (환경변수 사용)
+API_KEY = os.getenv("BITGET_ACCESS_KEY")
+API_SECRET = os.getenv("BITGET_SECRET_KEY")
+API_PASSPHRASE = os.getenv("BITGET_PASSPHRASE")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 텔레그램 설정
+# ═══════════════════════════════════════════════════════════════════════════════
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# 일반 설정
+BASE_URL = "https://api.bitget.com"
+DRY_RUN = False
+LOG_LEVEL = logging.INFO
+LOG_FILE = "trading_bot_binance_signal.log"
+CANDLE_START_DELAY = 10
+RETRY_INTERVAL = 60
+
+# 로깅
+def setup_logging():
+    logger = logging.getLogger('BitgetBot')
+    logger.setLevel(LOG_LEVEL)
+    if logger.handlers:
+        logger.handlers.clear()
+    ch = logging.StreamHandler()
+    ch.setLevel(LOG_LEVEL)
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+    fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
+    fh.setLevel(LOG_LEVEL)
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    logger.propagate = False
+    return logger
+
+logger = setup_logging()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 텔레그램 알림 함수
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def send_telegram(message: str) -> bool:
+    """텔레그램 메시지 전송"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.warning("텔레그램 설정이 되어있지 않습니다. .env 파일을 확인하세요.")
+        return False
+    
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        response = requests.post(url, data=data, timeout=10)
+        if response.status_code == 200:
+            logger.debug("텔레그램 알림 전송 성공")
+            return True
+        else:
+            logger.error(f"텔레그램 전송 실패: {response.text}")
+            return False
+    except Exception as e:
+        logger.error(f"텔레그램 전송 중 오류: {e}")
+        return False
+
+
+def send_entry_alert(symbol: str, side: str, size: str, price: float, 
+                     leverage: int, order_type: str = "지정가"):
+    """포지션 진입 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    emoji = "🟢" if side.lower() == "long" else "🔴"
+    
+    msg = f"{emoji} <b>Bitget 선물 진입</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📌 심볼: <b>{symbol}</b>\n"
+    msg += f"📊 방향: {side.upper()}\n"
+    msg += f"💰 가격: ${price:,.2f}\n"
+    msg += f"📐 수량: {size}\n"
+    msg += f"⚡ 레버리지: {leverage}x\n"
+    msg += f"📋 주문유형: {order_type}\n"
+    msg += f"📡 신호: Binance\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+def send_close_alert(symbol: str, size: float, entry_price: float, 
+                     exit_price: float, pnl: float, reason: str = ""):
+    """포지션 청산 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    pnl_emoji = "💚" if pnl >= 0 else "❤️"
+    pnl_sign = "+" if pnl >= 0 else ""
+    
+    msg = f"🔴 <b>Bitget 선물 청산</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📌 심볼: <b>{symbol}</b>\n"
+    msg += f"📐 수량: {size}\n"
+    msg += f"📈 진입가: ${entry_price:,.2f}\n"
+    msg += f"📉 청산가: ${exit_price:,.2f}\n"
+    msg += f"{pnl_emoji} 손익: <b>{pnl_sign}{pnl:,.2f} USDT</b>\n"
+    if reason:
+        msg += f"📋 사유: {reason}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+def send_leverage_change_alert(symbol: str, old_lev: int, new_lev: int):
+    """레버리지 변경 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    old_str = f"{old_lev}x" if old_lev > 0 else "현금"
+    new_str = f"{new_lev}x" if new_lev > 0 else "현금"
+    
+    msg = f"🔄 <b>레버리지 변경</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📌 심볼: <b>{symbol}</b>\n"
+    msg += f"📊 변경: {old_str} → {new_str}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+def send_error_alert(symbol: str, error_message: str):
+    """에러 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    msg = f"⚠️ <b>오류 발생</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📌 심볼: {symbol}\n"
+    msg += f"❌ 오류: {error_message}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+def send_bot_start_alert(configs: List[Dict], total_equity: float):
+    """봇 시작 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    msg = f"🚀 <b>Bitget 선물봇 시작</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📡 신호: Binance API\n"
+    msg += f"💹 매매: Bitget API\n"
+    msg += f"💰 총 자산: <b>${total_equity:,.2f}</b>\n"
+    msg += f"📊 활성 전략: {len(configs)}개\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    
+    for c in configs:
+        e_desc = "현금" if c['leverage_down'] == 0 else f"{c['leverage_down']}x"
+        msg += f"• {c['symbol']}: {c['leverage_up']}x/{e_desc}\n"
+    
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+def send_portfolio_alert(total_equity: float, available: float, pnl: float, positions: List[Dict]):
+    """포트폴리오 현황 알림"""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    pnl_emoji = "💚" if pnl >= 0 else "❤️"
+    pnl_sign = "+" if pnl >= 0 else ""
+    
+    msg = f"📊 <b>포트폴리오 현황</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"💰 총 자산: <b>${total_equity:,.2f}</b>\n"
+    msg += f"💵 가용 잔고: ${available:,.2f}\n"
+    msg += f"{pnl_emoji} 미실현 손익: {pnl_sign}{pnl:,.2f}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    
+    if positions:
+        msg += f"<b>보유 포지션</b>\n"
+        for p in positions:
+            pos_pnl = p.get('pnl', 0)
+            pos_emoji = "🟢" if pos_pnl >= 0 else "🔴"
+            msg += f"{pos_emoji} {p['symbol']}: {p['size']} @ {p['leverage']}x ({pos_pnl:+,.2f})\n"
+    else:
+        msg += f"📍 보유 포지션 없음\n"
+    
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📊 Binance 공개 API 클라이언트 (신호 데이터 전용, API 키 불필요)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BinancePublicClient:
+    """Binance 공개 API 클라이언트 (API 키 불필요)"""
+    
+    BASE_URL = "https://fapi.binance.com"
+    
+    TIMEFRAME_MAP = {
+        '1m': '1m',
+        '5m': '5m',
+        '15m': '15m',
+        '30m': '30m',
+        '1H': '1h',
+        '4H': '4h',
+        '1D': '1d',
+        '1W': '1w',
+    }
+    
+    def __init__(self):
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Content-Type': 'application/json'
+        })
+    
+    def _request(self, endpoint: str, params: Dict = None) -> any:
+        url = self.BASE_URL + endpoint
+        try:
+            resp = self.session.get(url, params=params, timeout=30)
+            if resp.status_code != 200:
+                logger.error(f"Binance API 오류: {resp.status_code} - {resp.text}")
+                return None
+            return resp.json()
+        except Exception as e:
+            logger.error(f"Binance API 요청 실패: {e}")
+            return None
+    
+    def get_ticker(self, symbol: str) -> Dict:
+        data = self._request("/fapi/v1/ticker/price", {'symbol': symbol})
+        if data:
+            return {
+                'symbol': data.get('symbol'),
+                'lastPr': data.get('price'),
+                'price': float(data.get('price', 0))
+            }
+        return None
+    
+    def get_candles(self, symbol: str, interval: str, limit: int = 300) -> pd.DataFrame:
+        binance_interval = self.TIMEFRAME_MAP.get(interval, interval.lower())
+        
+        data = self._request("/fapi/v1/klines", {
+            'symbol': symbol,
+            'interval': binance_interval,
+            'limit': limit
+        })
+        
+        if not data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+        
+        df['timestamp'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
+        for c in ['open', 'high', 'low', 'close', 'volume']:
+            df[c] = df[c].astype(float)
+        
+        return df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].sort_values('timestamp').reset_index(drop=True)
+    
+    def get_candles_pagination(self, symbol: str, interval: str, required_count: int = 300) -> pd.DataFrame:
+        binance_interval = self.TIMEFRAME_MAP.get(interval, interval.lower())
+        
+        all_df = pd.DataFrame()
+        end_ts = int(time.time() * 1000)
+        
+        while len(all_df) < required_count:
+            data = self._request("/fapi/v1/klines", {
+                'symbol': symbol,
+                'interval': binance_interval,
+                'endTime': end_ts,
+                'limit': 1000
+            })
+            
+            if not data:
+                break
+            
+            df = pd.DataFrame(data, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+                'taker_buy_quote', 'ignore'
+            ])
+            
+            df['timestamp'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
+            for c in ['open', 'high', 'low', 'close', 'volume']:
+                df[c] = df[c].astype(float)
+            
+            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+            
+            all_df = pd.concat([df, all_df]).drop_duplicates(subset=['timestamp']).sort_values('timestamp')
+            end_ts = int(df['timestamp'].min().timestamp() * 1000) - 1
+            
+            if len(all_df) >= required_count:
+                break
+            
+            time.sleep(0.1)
+        
+        return all_df.reset_index(drop=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📈 Bitget API 클라이언트 (매매 전용)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BitgetClient:
+    """Bitget API V2 클라이언트 (헤지 모드 지원) - 매매 전용"""
+    
+    def __init__(self, api_key: str, api_secret: str, passphrase: str):
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.passphrase = passphrase
+        self.base_url = BASE_URL
+        self.session = requests.Session()
+        self._position_mode = None
+    
+    def _get_timestamp(self) -> str:
+        return str(int(time.time() * 1000))
+    
+    def _sign(self, timestamp: str, method: str, request_path: str, body: str = "") -> str:
+        message = timestamp + method.upper() + request_path + body
+        mac = hmac.new(self.api_secret.encode('utf-8'), message.encode('utf-8'), hashlib.sha256)
+        return base64.b64encode(mac.digest()).decode('utf-8')
+    
+    def _get_headers(self, method: str, request_path: str, body: str = "") -> Dict:
+        ts = self._get_timestamp()
+        return {
+            'ACCESS-KEY': self.api_key,
+            'ACCESS-SIGN': self._sign(ts, method, request_path, body),
+            'ACCESS-TIMESTAMP': ts,
+            'ACCESS-PASSPHRASE': self.passphrase,
+            'Content-Type': 'application/json',
+            'locale': 'en-US'
+        }
+    
+    def _request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None) -> Dict:
+        url = self.base_url + endpoint
+        request_path = endpoint
+        
+        if params:
+            qs = '&'.join([f"{k}={v}" for k, v in params.items()])
+            request_path = endpoint + '?' + qs
+            url = url + '?' + qs
+        
+        body_str = json.dumps(body, separators=(',', ':')) if body else ""
+        headers = self._get_headers(method, request_path, body_str)
+        
+        try:
+            if method == 'GET':
+                resp = self.session.get(url, headers=headers, timeout=30)
+            else:
+                resp = self.session.post(url, headers=headers, data=body_str, timeout=30)
+            data = resp.json()
+            if data.get('code') != '00000':
+                logger.error(f"API 오류: {data}")
+                return None
+            return data.get('data')
+        except Exception as e:
+            logger.error(f"API 요청 실패: {e}")
+            return None
+    
+    def get_position_mode(self, product_type: str = 'USDT-FUTURES') -> str:
+        if self._position_mode:
+            return self._position_mode
+        data = self._request('GET', "/api/v2/mix/account/account", {
+            'symbol': 'BTCUSDT',
+            'productType': product_type,
+            'marginCoin': 'USDT'
+        })
+        if data:
+            self._position_mode = data.get('posMode', 'one_way_mode')
+        else:
+            self._position_mode = 'one_way_mode'
+        logger.info(f"📋 포지션 모드: {self._position_mode}")
+        return self._position_mode
+    
+    def is_hedge_mode(self, product_type: str = 'USDT-FUTURES') -> bool:
+        return self.get_position_mode(product_type) == 'hedge_mode'
+    
+    def get_account(self, product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> Dict:
+        data = self._request('GET', "/api/v2/mix/account/accounts", {'productType': product_type})
+        if not data:
+            return None
+        for acc in data:
+            if acc.get('marginCoin') == margin_coin:
+                return acc
+        return data[0] if data else None
+    
+    def get_position(self, symbol: str, product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> List[Dict]:
+        data = self._request('GET', "/api/v2/mix/position/single-position", {
+            'symbol': symbol,
+            'productType': product_type,
+            'marginCoin': margin_coin
+        })
+        return data if data else []
+    
+    def set_leverage(self, symbol: str, leverage: int, product_type: str = 'USDT-FUTURES',
+                     margin_coin: str = 'USDT', hold_side: str = 'long') -> bool:
+        body = {
+            'symbol': symbol,
+            'productType': product_type,
+            'marginCoin': margin_coin,
+            'leverage': str(leverage)
+        }
+        if self.is_hedge_mode(product_type):
+            body['holdSide'] = hold_side
+        result = self._request('POST', "/api/v2/mix/account/set-leverage", body=body)
+        return result is not None
+    
+    def get_ticker(self, symbol: str, product_type: str = 'USDT-FUTURES') -> Dict:
+        data = self._request('GET', "/api/v2/mix/market/ticker", {
+            'symbol': symbol,
+            'productType': product_type
+        })
+        if data and isinstance(data, list) and len(data) > 0:
+            return data[0]
+        return data
+    
+    def cancel_all_orders(self, symbol: str, product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> bool:
+        result = self._request('POST', "/api/v2/mix/order/cancel-all-orders", body={
+            'symbol': symbol,
+            'productType': product_type,
+            'marginCoin': margin_coin
+        })
+        if result is not None:
+            logger.debug(f"[{symbol}] 미체결 주문 취소 완료")
+        return True
+    
+    def get_order(self, symbol: str, order_id: str, product_type: str = 'USDT-FUTURES') -> Dict:
+        return self._request('GET', "/api/v2/mix/order/detail", {
+            'symbol': symbol,
+            'productType': product_type,
+            'orderId': order_id
+        })
+    
+    def cancel_order(self, symbol: str, order_id: str, product_type: str = 'USDT-FUTURES') -> Dict:
+        return self._request('POST', "/api/v2/mix/order/cancel-order", body={
+            'symbol': symbol,
+            'productType': product_type,
+            'orderId': order_id
+        })
+    
+    def place_limit_order(self, symbol: str, side: str, size: str, price: str,
+                          trade_side: str, pos_side: str,
+                          product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> Dict:
+        body = {
+            'symbol': symbol,
+            'productType': product_type,
+            'marginMode': 'crossed',
+            'marginCoin': margin_coin,
+            'size': size,
+            'price': price,
+            'side': side,
+            'tradeSide': trade_side,
+            'posSide': pos_side,
+            'orderType': 'limit',
+            'force': 'gtc'
+        }
+        return self._request('POST', "/api/v2/mix/order/place-order", body=body)
+    
+    def place_market_order(self, symbol: str, side: str, size: str,
+                           trade_side: str, pos_side: str,
+                           product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> Dict:
+        body = {
+            'symbol': symbol,
+            'productType': product_type,
+            'marginMode': 'crossed',
+            'marginCoin': margin_coin,
+            'size': size,
+            'side': side,
+            'tradeSide': trade_side,
+            'posSide': pos_side,
+            'orderType': 'market'
+        }
+        return self._request('POST', "/api/v2/mix/order/place-order", body=body)
+    
+    def flash_close_position(self, symbol: str, product_type: str = 'USDT-FUTURES', hold_side: str = 'long') -> Dict:
+        return self._request('POST', "/api/v2/mix/order/close-positions", body={
+            'symbol': symbol,
+            'productType': product_type,
+            'holdSide': hold_side
+        })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📊 [v3.2 개선] 포트폴리오 매니저 - 가용 잔고 기반 동적 계산
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PortfolioManager:
+    def __init__(self, client: BitgetClient, configs: List[Dict]):
+        self.client = client
+        self.configs = [c for c in configs if c['enabled']]
+    
+    def get_account_info(self) -> Dict:
+        """계좌 정보 조회 (총 자산, 가용 잔고, 마진 등)"""
+        if not self.configs:
+            return {'equity': 0, 'available': 0, 'margin': 0, 'pnl': 0}
+        
+        acc = self.client.get_account(self.configs[0]['product_type'], self.configs[0]['margin_coin'])
+        if not acc:
+            return {'equity': 0, 'available': 0, 'margin': 0, 'pnl': 0}
+        
+        return {
+            'equity': float(acc.get('usdtEquity', 0)),
+            'available': float(acc.get('crossedMaxAvailable', 0)),
+            'margin': float(acc.get('crossedMargin', 0)),
+            'pnl': float(acc.get('unrealizedPL', 0))
+        }
+    
+    def get_total_equity(self) -> float:
+        """총 자산 조회"""
+        return self.get_account_info()['equity']
+    
+    def get_available_balance(self) -> float:
+        """가용 잔고 조회"""
+        return self.get_account_info()['available']
+    
+    def count_empty_slots(self) -> int:
+        """
+        [v3.2] 포지션이 없는 빈 슬롯 수 계산
+        """
+        empty_count = 0
+        for cfg in self.configs:
+            pos_data = self.client.get_position(cfg['symbol'], cfg['product_type'], cfg['margin_coin'])
+            has_position = False
+            if pos_data:
+                for p in pos_data:
+                    if float(p.get('total', 0)) > 0:
+                        has_position = True
+                        break
+            if not has_position:
+                empty_count += 1
+        return empty_count
+    
+    def get_position_status(self) -> Dict[str, bool]:
+        """
+        [v3.2] 각 심볼별 포지션 보유 여부 확인
+        Returns: {'BTCUSDT': True, 'ETHUSDT': False, ...}
+        """
+        status = {}
+        for cfg in self.configs:
+            pos_data = self.client.get_position(cfg['symbol'], cfg['product_type'], cfg['margin_coin'])
+            has_position = False
+            if pos_data:
+                for p in pos_data:
+                    if float(p.get('total', 0)) > 0:
+                        has_position = True
+                        break
+            status[cfg['symbol']] = has_position
+        return status
+    
+    def calculate_invest_amount(self) -> float:
+        """
+        [v3.2 핵심 개선] 가용 잔고 기반 투자금액 계산
+        - 실제 가용 잔고(crossedMaxAvailable)를 기준으로 계산
+        - 빈 슬롯 수로 나누어 균등 배분
+        - 수수료 여유분 고려
+        """
+        available = self.get_available_balance()
+        empty_slots = self.count_empty_slots()
+        
+        if empty_slots == 0:
+            logger.info("📊 모든 슬롯에 포지션 보유 중 - 신규 진입 불가")
+            return 0
+        
+        # 수수료 0.5% 고려하여 99.5%만 사용
+        usable_balance = available * 0.995
+        invest_amount = usable_balance / empty_slots
+        
+        logger.info(f"💰 자금 배분: 가용 ${available:,.2f} / 빈슬롯 {empty_slots}개 = 코인당 ${invest_amount:,.2f}")
+        
+        return invest_amount
+    
+    def get_allocated_capital(self, config: Dict) -> float:
+        """
+        [v3.2 개선] 개별 코인 배분 자본 계산
+        - 기존: 총 자산 * allocation_pct
+        - 개선: 가용 잔고 기반 동적 계산
+        """
+        return self.calculate_invest_amount()
+    
+    def get_all_positions(self) -> List[Dict]:
+        """모든 활성 포지션 조회"""
+        positions = []
+        for cfg in self.configs:
+            pos_data = self.client.get_position(cfg['symbol'], cfg['product_type'], cfg['margin_coin'])
+            if pos_data:
+                for p in pos_data:
+                    total = float(p.get('total', 0))
+                    if total > 0:
+                        positions.append({
+                            'symbol': cfg['symbol'],
+                            'size': total,
+                            'leverage': int(p.get('leverage', 0)),
+                            'pnl': float(p.get('unrealizedPL', 0)),
+                            'avg_price': float(p.get('averageOpenPrice', 0))
+                        })
+        return positions
+    
+    def log_portfolio_status(self, send_alert: bool = False):
+        """포트폴리오 현황 로깅"""
+        acc_info = self.get_account_info()
+        equity = acc_info['equity']
+        available = acc_info['available']
+        margin = acc_info['margin']
+        pnl = acc_info['pnl']
+        
+        empty_slots = self.count_empty_slots()
+        total_slots = len(self.configs)
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.2]")
+        logger.info(f"{'='*70}")
+        logger.info(f"   총 자산: {equity:,.2f} USDT")
+        logger.info(f"   가용 잔고: {available:,.2f} USDT")
+        logger.info(f"   사용 마진: {margin:,.2f} USDT")
+        logger.info(f"   미실현 손익: {pnl:+,.2f} USDT")
+        logger.info(f"   슬롯 현황: {total_slots - empty_slots}/{total_slots} 사용 중")
+        
+        if empty_slots > 0:
+            invest_per_slot = (available * 0.995) / empty_slots
+            logger.info(f"   신규 진입 시 코인당: {invest_per_slot:,.2f} USDT")
+        
+        logger.info(f"{'='*70}\n")
+        
+        if send_alert:
+            positions = self.get_all_positions()
+            send_portfolio_alert(equity, available, pnl, positions)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📈 트레이딩 봇
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TradingBot:
+    def __init__(self, bitget_client: BitgetClient, binance_client: BinancePublicClient, 
+                 config: Dict, portfolio: PortfolioManager):
+        self.client = bitget_client
+        self.signal_client = binance_client
+        self.config = config
+        self.portfolio = portfolio
+        self.symbol = config['symbol']
+        self.product_type = config['product_type']
+        self.margin_coin = config['margin_coin']
+        self.ma_period = config['ma_period']
+        self.ma_type = config['ma_type']
+        self.timeframe = config['timeframe']
+        self.stoch_k_period = config['stoch_k_period']
+        self.stoch_k_smooth = config['stoch_k_smooth']
+        self.stoch_d_period = config['stoch_d_period']
+        self.leverage_up = config['leverage_up']
+        self.leverage_down = config['leverage_down']
+        self.tick_size = config.get('tick_size', 0.1)
+        self.size_decimals = config.get('size_decimals', 3)
+        self.position_size_pct = config['position_size_pct']
+        self.description = config.get('description', self.symbol)
+    
+    def round_price(self, price: float) -> float:
+        return round(price / self.tick_size) * self.tick_size
+    
+    def format_price(self, price: float) -> str:
+        if self.tick_size >= 1: return f"{price:.0f}"
+        elif self.tick_size >= 0.1: return f"{price:.1f}"
+        elif self.tick_size >= 0.01: return f"{price:.2f}"
+        elif self.tick_size >= 0.001: return f"{price:.3f}"
+        else: return f"{price:.4f}"
+    
+    def format_size(self, size: float) -> str:
+        return f"{size:.{self.size_decimals}f}"
+    
+    def get_current_position(self) -> Dict:
+        positions = self.client.get_position(self.symbol, self.product_type, self.margin_coin)
+        if not positions:
+            return {'side': None, 'size': 0, 'unrealized_pnl': 0, 'leverage': 0}
+        for p in positions:
+            total = float(p.get('total', 0))
+            if p.get('holdSide') == 'long' and total > 0:
+                return {
+                    'side': 'long',
+                    'size': total,
+                    'avg_price': float(p.get('averageOpenPrice', 0)),
+                    'unrealized_pnl': float(p.get('unrealizedPL', 0)),
+                    'leverage': int(p.get('leverage', 0))
+                }
+        return {'side': None, 'size': 0, 'unrealized_pnl': 0, 'leverage': 0}
+    
+    def wait_for_fill(self, order_id: str, timeout: int = ORDER_WAIT_SECONDS) -> Tuple[str, float]:
+        start = time.time()
+        while time.time() - start < timeout:
+            order = self.client.get_order(self.symbol, order_id, self.product_type)
+            if not order:
+                time.sleep(0.5)
+                continue
+            
+            status = order.get('state', '')
+            filled_size = float(order.get('baseVolume', 0))
+            
+            if status == 'filled':
+                return 'filled', filled_size
+            if status in ['canceled', 'cancelled']:
+                return 'canceled', filled_size
+            
+            time.sleep(0.5)
+        
+        order = self.client.get_order(self.symbol, order_id, self.product_type)
+        if order:
+            filled_size = float(order.get('baseVolume', 0))
+            if order.get('state') == 'filled':
+                return 'filled', filled_size
+            elif filled_size > 0:
+                return 'partially_filled', filled_size
+        
+        return 'timeout', 0
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # [v3.2 개선] 포지션 크기 계산 - 가용 잔고 기반
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def calculate_position_size(self, price: float, leverage: int) -> str:
+        """
+        [v3.2 개선] 가용 잔고 기반 포지션 크기 계산
+        - 진입 직전에 가용 잔고를 확인하여 계산
+        - 빈 슬롯 수 기준으로 균등 배분
+        """
+        if leverage <= 0:
+            return "0"
+        
+        # [v3.2] 진입 직전 가용 잔고 기반 투자금액 계산
+        allocated = self.portfolio.calculate_invest_amount()
+        
+        if allocated <= 0:
+            logger.warning(f"[{self.symbol}] 배분 가능한 자금이 없습니다")
+            return "0"
+        
+        # position_size_pct 적용 (95% 사용)
+        use = allocated * (self.position_size_pct / 100)
+        
+        if use < 5:
+            logger.warning(f"[{self.symbol}] 주문 금액이 최소 5 USDT 미만: {use:.2f}")
+            return "0"
+        
+        min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1}
+        min_size = min_sizes.get(self.symbol, 0.001)
+        
+        # 레버리지 적용하여 수량 계산
+        size = (use * leverage) / price
+        size = max(min_size, round(size, self.size_decimals))
+        
+        logger.info(f"[{self.symbol}] 💵 배분: {allocated:.2f}, 사용: {use:.2f}, Lev {leverage}x → 수량: {size}")
+        return self.format_size(size)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 안전한 진입/청산 (텔레그램 알림 포함)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def safe_limit_entry(self, leverage: int) -> bool:
+        if leverage <= 0:
+            return False
+        
+        self.client.set_leverage(self.symbol, leverage, self.product_type, self.margin_coin, 'long')
+        
+        ticker = self.signal_client.get_ticker(self.symbol)
+        if not ticker:
+            logger.error(f"[{self.symbol}] 현재가 조회 실패 (Binance)")
+            send_error_alert(self.symbol, "현재가 조회 실패 (Binance)")
+            return False
+        
+        price = float(ticker.get('price', 0))
+        if price <= 0:
+            return False
+        
+        # [v3.2] 진입 직전에 포지션 크기 계산 (가용 잔고 기반)
+        target_size = self.calculate_position_size(price, leverage)
+        if target_size == "0":
+            logger.error(f"[{self.symbol}] 포지션 크기 계산 실패 또는 자금 부족")
+            return False
+        
+        target_size_float = float(target_size)
+        remaining_size = target_size_float
+        total_filled = 0.0
+        
+        if DRY_RUN:
+            logger.info(f"[{self.symbol}] [DRY RUN] Long 진입: {target_size}")
+            return True
+        
+        entry_price_for_alert = price
+        order_type_for_alert = "지정가"
+        
+        for retry in range(1, MAX_LIMIT_RETRY + 1):
+            if remaining_size <= 0:
+                break
+            
+            self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
+            time.sleep(0.2)
+            
+            ticker = self.client.get_ticker(self.symbol, self.product_type)
+            if not ticker:
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            price = float(ticker.get('lastPr', 0))
+            entry_price = self.round_price(price + self.tick_size * LIMIT_ORDER_TICKS)
+            entry_price_for_alert = entry_price
+            
+            remaining_str = self.format_size(remaining_size)
+            logger.info(f"[{self.symbol}] 📤 지정가 매수 #{retry}: {remaining_str} @ {self.format_price(entry_price)}")
+            
+            result = self.client.place_limit_order(
+                self.symbol, 'buy', remaining_str, self.format_price(entry_price),
+                'open', 'long', self.product_type, self.margin_coin
+            )
+            
+            if not result:
+                logger.warning(f"[{self.symbol}] 주문 실패, 재시도...")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            order_id = result.get('orderId')
+            if not order_id:
+                logger.warning(f"[{self.symbol}] 주문 ID 없음, 재시도...")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            status, filled = self.wait_for_fill(order_id)
+            total_filled += filled
+            remaining_size = target_size_float - total_filled
+            
+            if status == 'filled':
+                logger.info(f"[{self.symbol}] ✅ Long 진입 완료: {self.format_size(total_filled)}")
+                send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                               entry_price_for_alert, leverage, order_type_for_alert)
+                return True
+            elif status == 'partially_filled':
+                logger.info(f"[{self.symbol}] ⏳ 부분 체결: {self.format_size(filled)}, 잔여: {self.format_size(remaining_size)}")
+                self.client.cancel_order(self.symbol, order_id, self.product_type)
+            else:
+                logger.info(f"[{self.symbol}] ⏳ 미체결 ({status}), 재시도...")
+                self.client.cancel_order(self.symbol, order_id, self.product_type)
+            
+            time.sleep(RETRY_DELAY_SECONDS)
+        
+        if remaining_size > 0:
+            min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1}
+            min_size = min_sizes.get(self.symbol, 0.001)
+            
+            if remaining_size >= min_size:
+                logger.warning(f"[{self.symbol}] ⚠️ 지정가 {MAX_LIMIT_RETRY}회 실패, 시장가 전환: {self.format_size(remaining_size)}")
+                self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
+                
+                result = self.client.place_market_order(
+                    self.symbol, 'buy', self.format_size(remaining_size),
+                    'open', 'long', self.product_type, self.margin_coin
+                )
+                
+                if result:
+                    logger.info(f"[{self.symbol}] ✅ 시장가 진입 완료")
+                    order_type_for_alert = "시장가"
+                    send_entry_alert(self.symbol, "Long", self.format_size(target_size_float), 
+                                   entry_price_for_alert, leverage, order_type_for_alert)
+                    return True
+                else:
+                    logger.error(f"[{self.symbol}] ❌ 시장가 진입 실패")
+                    send_error_alert(self.symbol, "시장가 진입 실패")
+                    if total_filled > 0:
+                        send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                                       entry_price_for_alert, leverage, "부분체결")
+                    return total_filled > 0
+            else:
+                logger.info(f"[{self.symbol}] ✅ 잔여 물량 미달, 진입 완료: {self.format_size(total_filled)}")
+                send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                               entry_price_for_alert, leverage, order_type_for_alert)
+                return True
+        
+        return True
+    
+    def safe_limit_close(self, reason: str = "") -> bool:
+        pos = self.get_current_position()
+        if pos['side'] != 'long' or pos['size'] <= 0:
+            logger.info(f"[{self.symbol}] 청산할 포지션 없음")
+            return True
+        
+        entry_price = pos.get('avg_price', 0)
+        position_size = pos['size']
+        unrealized_pnl = pos.get('unrealized_pnl', 0)
+        
+        reason_str = f" ({reason})" if reason else ""
+        
+        if DRY_RUN:
+            logger.info(f"[{self.symbol}] [DRY RUN] Long 청산{reason_str}")
+            return True
+        
+        for retry in range(1, MAX_LIMIT_RETRY + 1):
+            pos = self.get_current_position()
+            if pos['side'] != 'long' or pos['size'] <= 0:
+                logger.info(f"[{self.symbol}] ✅ 청산 완료{reason_str}")
+                ticker = self.client.get_ticker(self.symbol, self.product_type)
+                exit_price = float(ticker.get('lastPr', 0)) if ticker else entry_price
+                send_close_alert(self.symbol, position_size, entry_price, exit_price, unrealized_pnl, reason)
+                return True
+            
+            remaining = pos['size']
+            
+            self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
+            time.sleep(0.2)
+            
+            ticker = self.client.get_ticker(self.symbol, self.product_type)
+            if not ticker:
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            price = float(ticker.get('lastPr', 0))
+            exit_price = self.round_price(price - self.tick_size * LIMIT_ORDER_TICKS)
+            
+            remaining_str = self.format_size(remaining)
+            logger.info(f"[{self.symbol}] 📤 지정가 청산 #{retry}{reason_str}: {remaining_str} @ {self.format_price(exit_price)}")
+            
+            result = self.client.place_limit_order(
+                self.symbol, 'sell', remaining_str, self.format_price(exit_price),
+                'close', 'long', self.product_type, self.margin_coin
+            )
+            
+            if not result:
+                logger.warning(f"[{self.symbol}] 지정가 청산 실패, 재시도...")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            order_id = result.get('orderId')
+            if not order_id:
+                logger.warning(f"[{self.symbol}] 주문 ID 없음, 재시도...")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            
+            status, filled = self.wait_for_fill(order_id)
+            
+            if status == 'filled':
+                logger.info(f"[{self.symbol}] ✅ Long 청산 완료{reason_str}")
+                send_close_alert(self.symbol, position_size, entry_price, exit_price, unrealized_pnl, reason)
+                return True
+            elif status == 'partially_filled':
+                logger.info(f"[{self.symbol}] ⏳ 부분 청산: {self.format_size(filled)}")
+                self.client.cancel_order(self.symbol, order_id, self.product_type)
+            else:
+                logger.info(f"[{self.symbol}] ⏳ 미체결 ({status}), 재시도...")
+                self.client.cancel_order(self.symbol, order_id, self.product_type)
+            
+            time.sleep(RETRY_DELAY_SECONDS)
+        
+        logger.warning(f"[{self.symbol}] ⚠️ 지정가 {MAX_LIMIT_RETRY}회 실패, 플래시 청산...")
+        self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
+        
+        result = self.client.flash_close_position(self.symbol, self.product_type, 'long')
+        if result:
+            logger.info(f"[{self.symbol}] ✅ 플래시 청산 완료{reason_str}")
+            ticker = self.client.get_ticker(self.symbol, self.product_type)
+            exit_price = float(ticker.get('lastPr', 0)) if ticker else entry_price
+            send_close_alert(self.symbol, position_size, entry_price, exit_price, unrealized_pnl, reason + " (플래시)")
+            return True
+        
+        logger.error(f"[{self.symbol}] ❌ 청산 최종 실패")
+        send_error_alert(self.symbol, "청산 최종 실패")
+        return False
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 전략 로직 (Binance 데이터 사용)
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def calculate_ma(self, df: pd.DataFrame) -> pd.Series:
+        if self.ma_type == 'EMA':
+            return df['close'].ewm(span=self.ma_period, adjust=False).mean()
+        return df['close'].rolling(window=self.ma_period).mean()
+    
+    def calculate_stochastic(self, df: pd.DataFrame) -> tuple:
+        if df.empty:
+            return pd.Series(), pd.Series()
+        low_min = df['low'].rolling(window=self.stoch_k_period).min()
+        high_max = df['high'].rolling(window=self.stoch_k_period).max()
+        fast_k = ((df['close'] - low_min) / (high_max - low_min)) * 100
+        fast_k = fast_k.replace([np.inf, -np.inf], np.nan)
+        slow_k = fast_k.rolling(window=self.stoch_k_smooth).mean()
+        slow_d = slow_k.rolling(window=self.stoch_d_period).mean()
+        return slow_k, slow_d
+    
+    def get_stochastic_signal(self) -> tuple:
+        required = self.stoch_k_period + self.stoch_k_smooth + self.stoch_d_period + 50
+        df = self.signal_client.get_candles_pagination(self.symbol, '1D', required)
+        if df.empty:
+            logger.warning(f"[{self.symbol}] Binance 1D 캔들 조회 실패")
+            return False, 0, 0
+        slow_k, slow_d = self.calculate_stochastic(df)
+        valid_k = slow_k.dropna()
+        valid_d = slow_d.dropna()
+        if len(valid_k) < 2 or len(valid_d) < 2:
+            return False, 0, 0
+        k = valid_k.iloc[-2]
+        d = valid_d.iloc[-2]
+        if pd.isna(k) or pd.isna(d):
+            return False, 0, 0
+        return k > d, k, d
+    
+    def get_target_leverage(self) -> int:
+        is_bullish, k, d = self.get_stochastic_signal()
+        if is_bullish:
+            target = self.leverage_up
+            state = "상승장 📈"
+        else:
+            target = self.leverage_down
+            state = "하락장 📉"
+        lev_desc = f"{target}x" if target > 0 else "현금"
+        logger.info(f"[{self.symbol}] 🎯 Stoch(1D/Binance): K={k:.2f}, D={d:.2f} → {state} ({lev_desc})")
+        return target
+    
+    def get_ma_signal(self) -> Optional[int]:
+        df = self.signal_client.get_candles(self.symbol, self.timeframe, self.ma_period + 10)
+        if df is None or df.empty or len(df) < self.ma_period:
+            logger.warning(f"[{self.symbol}] Binance {self.timeframe} 캔들 조회 실패")
+            return None
+        df['ma'] = self.calculate_ma(df)
+        open_price = df.iloc[-1]['open']
+        ma = df.iloc[-1]['ma']
+        if pd.isna(ma):
+            return None
+        signal = 1 if open_price > ma else 0
+        logger.info(f"[{self.symbol}] 📊 시가(Binance): {open_price:.2f}, MA{self.ma_period}: {ma:.2f} → {'LONG' if signal else 'CASH'}")
+        return signal
+    
+    def get_final_action(self) -> tuple:
+        ma_signal = self.get_ma_signal()
+        if ma_signal is None:
+            return ('HOLD', 0)
+        if ma_signal == 0:
+            return ('CASH', 0)
+        target_lev = self.get_target_leverage()
+        if target_lev == 0:
+            return ('CASH', 0)
+        return ('LONG', target_lev)
+    
+    def adjust_leverage(self, target: int) -> bool:
+        if target <= 0:
+            return self.safe_limit_close(reason="레버리지→현금")
+        pos = self.get_current_position()
+        if pos['side'] != 'long' or pos['size'] <= 0:
+            return True
+        if pos.get('leverage', 0) == target:
+            return True
+        
+        old_lev = pos.get('leverage', 0)
+        logger.info(f"[{self.symbol}] 🔄 레버리지 변경: {old_lev}x → {target}x")
+        
+        send_leverage_change_alert(self.symbol, old_lev, target)
+        
+        if not self.safe_limit_close(reason="레버리지 변경"):
+            return False
+        time.sleep(1)
+        return self.safe_limit_entry(target)
+    
+    def show_status(self):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📊 [{self.symbol}] 현재 상태 (신호: Binance, 매매: Bitget)")
+        logger.info(f"{'='*60}")
+        
+        binance_ticker = self.signal_client.get_ticker(self.symbol)
+        bitget_ticker = self.client.get_ticker(self.symbol, self.product_type)
+        binance_price = float(binance_ticker.get('price', 0)) if binance_ticker else 0
+        bitget_price = float(bitget_ticker.get('lastPr', 0)) if bitget_ticker else 0
+        diff_pct = ((bitget_price - binance_price) / binance_price * 100) if binance_price > 0 else 0
+        logger.info(f"💵 현재가 - Binance: ${binance_price:,.2f} | Bitget: ${bitget_price:,.2f} (차이: {diff_pct:+.3f}%)")
+        
+        df = self.signal_client.get_candles(self.symbol, self.timeframe, self.ma_period + 10)
+        if df is not None and not df.empty and len(df) >= self.ma_period:
+            df['ma'] = self.calculate_ma(df)
+            ma = df.iloc[-1]['ma']
+            open_p = df.iloc[-1]['open']
+            sig = "🟢 LONG" if open_p > ma else "🔴 CASH"
+            logger.info(f"📈 MA{self.ma_period} (Binance): ${ma:,.2f}, 시가: ${open_p:,.2f} → {sig}")
+        
+        is_bull, k, d = self.get_stochastic_signal()
+        e_desc = f"{self.leverage_down}x" if self.leverage_down > 0 else "현금"
+        stoch_sig = f"🟢 상승장→{self.leverage_up}x" if is_bull else f"🔴 하락장→{e_desc}"
+        logger.info(f"📉 Stoch (Binance): K={k:.2f}, D={d:.2f} → {stoch_sig}")
+        
+        pos = self.get_current_position()
+        if pos['side'] == 'long' and pos['size'] > 0:
+            logger.info(f"📍 포지션 (Bitget): Long {pos['leverage']}x, {pos['size']} @ ${pos.get('avg_price',0):,.2f}, PnL: {pos['unrealized_pnl']:+,.2f}")
+        else:
+            logger.info(f"📍 포지션 (Bitget): 없음 (현금)")
+        logger.info(f"{'='*60}\n")
+    
+    def execute(self):
+        logger.info(f"\n{'─'*60}")
+        logger.info(f"[{self.symbol}] {self.description}")
+        logger.info(f"{'─'*60}")
+        action, target_lev = self.get_final_action()
+        pos = self.get_current_position()
+        has_pos = pos['side'] == 'long' and pos['size'] > 0
+        curr_lev = pos.get('leverage', 0)
+        if has_pos:
+            logger.info(f"[{self.symbol}] 📍 현재: Long {pos['size']} @ {curr_lev}x, PnL: {pos['unrealized_pnl']:+.2f}")
+        else:
+            logger.info(f"[{self.symbol}] 📍 현재: 현금")
+        lev_desc = f"{target_lev}x" if target_lev > 0 else "현금"
+        logger.info(f"[{self.symbol}] 🎯 목표: {action} ({lev_desc})")
+        if action == 'LONG':
+            if not has_pos:
+                logger.info(f"[{self.symbol}] 📈 Long 진입 (Lev {target_lev}x)")
+                self.safe_limit_entry(target_lev)
+            elif curr_lev != target_lev:
+                self.adjust_leverage(target_lev)
+            else:
+                logger.info(f"[{self.symbol}] ➡️ Long 유지")
+        elif action == 'CASH':
+            if has_pos:
+                is_bull, _, _ = self.get_stochastic_signal()
+                reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
+                logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
+                self.safe_limit_close(reason=reason)
+            else:
+                logger.info(f"[{self.symbol}] ➡️ 현금 유지")
+
+
+def get_candle_start_time(dt: datetime, timeframe: str) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    tf_min = {'1m': 1, '5m': 5, '15m': 15, '30m': 30, '1H': 60, '4H': 240, '1D': 1440}
+    minutes = tf_min.get(timeframe, 240)
+    if minutes < 1440:
+        total = dt.hour * 60 + dt.minute
+        start = (total // minutes) * minutes
+        return dt.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_next_candle_time(start: datetime, timeframe: str) -> datetime:
+    tf_min = {'1m': 1, '5m': 5, '15m': 15, '30m': 30, '1H': 60, '4H': 240, '1D': 1440}
+    return start + timedelta(minutes=tf_min.get(timeframe, 240))
+
+
+def load_api_credentials() -> tuple:
+    # 환경변수에서 로드된 전역 변수 사용
+    key = API_KEY
+    secret = API_SECRET
+    pw = API_PASSPHRASE
+    
+    if not all([key, secret, pw]):
+        logger.error("❌ Bitget API 키 미설정. .env 파일을 확인하세요.")
+    
+    return key, secret, pw
+
+
+def print_config():
+    print("\n" + "="*70)
+    print("📊 Bitget 자동매매 봇 v3.2 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("   [v3.2] 자금 배분 개선: 가용 잔고 기반 동적 계산")
+    print("="*70)
+    print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
+    print(f"📡 신호 데이터: Binance Futures 공개 API")
+    print(f"💹 매매 실행: Bitget Futures API")
+    print(f"📲 알림: 텔레그램")
+    print(f"📋 지정가 최대 재시도: {MAX_LIMIT_RETRY}회 (초과 시 시장가)")
+    print(f"\n📈 전략:")
+    for c in TRADING_CONFIGS:
+        if c['enabled']:
+            stoch = f"({c['stoch_k_period']},{c['stoch_k_smooth']},{c['stoch_d_period']})"
+            e = "현금" if c['leverage_down'] == 0 else f"{c['leverage_down']}x"
+            print(f"   {c['symbol']}: MA{c['ma_period']} + Stoch{stoch}, Lev {c['leverage_up']}x/{e}")
+    print("="*70)
+
+
+def main():
+    print_config()
+    
+    key, secret, pw = load_api_credentials()
+    if not all([key, secret, pw]):
+        return
+    
+    bitget_client = BitgetClient(key, secret, pw)
+    binance_client = BinancePublicClient()
+    
+    logger.info(f"📡 Binance 공개 API 연결 테스트...")
+    test_ticker = binance_client.get_ticker('BTCUSDT')
+    if test_ticker:
+        logger.info(f"✅ Binance 연결 성공 - BTC: ${float(test_ticker['price']):,.2f}")
+    else:
+        logger.error("❌ Binance 연결 실패")
+        return
+    
+    pos_mode = bitget_client.get_position_mode()
+    logger.info(f"🔧 Bitget 계좌 포지션 모드: {pos_mode}")
+    
+    portfolio = PortfolioManager(bitget_client, TRADING_CONFIGS)
+    bots = [TradingBot(bitget_client, binance_client, c, portfolio) for c in TRADING_CONFIGS if c['enabled']]
+    if not bots:
+        logger.error("❌ 활성 전략 없음")
+        return
+    logger.info(f"\n🚀 봇 시작 ({len(bots)}개 티커)")
+    
+    # 텔레그램 시작 알림
+    enabled_configs = [c for c in TRADING_CONFIGS if c['enabled']]
+    total_equity = portfolio.get_total_equity()
+    send_bot_start_alert(enabled_configs, total_equity)
+    
+    logger.info(f"\n{'='*70}")
+    logger.info(f"🔥 실행 즉시 거래 (1회)")
+    logger.info(f"{'='*70}")
+    portfolio.log_portfolio_status()
+    for bot in bots:
+        try:
+            bot.show_status()
+            bot.execute()
+        except Exception as e:
+            logger.error(f"[{bot.symbol}] 실행 오류: {e}")
+            send_error_alert(bot.symbol, str(e))
+            import traceback
+            traceback.print_exc()
+    
+    now = datetime.now(timezone.utc)
+    last_executed = {}
+    for bot in bots:
+        k = f"{bot.symbol}_{bot.timeframe}"
+        last_executed[k] = get_candle_start_time(now, bot.timeframe)
+    
+    candle_start = get_candle_start_time(now, '4H')
+    next_candle = get_next_candle_time(candle_start, '4H')
+    logger.info(f"\n⏰ 다음 4H 봉: {next_candle.strftime('%Y-%m-%d %H:%M:%S')} UTC ({(next_candle-now).total_seconds()/60:.1f}분)")
+    
+    try:
+        while True:
+            now = datetime.now(timezone.utc)
+            for bot in bots:
+                try:
+                    start = get_candle_start_time(now, bot.timeframe)
+                    k = f"{bot.symbol}_{bot.timeframe}"
+                    if last_executed.get(k) == start:
+                        continue
+                    elapsed = (now - start).total_seconds()
+                    if 0 <= elapsed <= 300:
+                        if elapsed < CANDLE_START_DELAY:
+                            time.sleep(CANDLE_START_DELAY - elapsed)
+                        logger.info(f"\n🕐 {bot.timeframe} 봉: {start}")
+                        if bot == bots[0]:
+                            portfolio.log_portfolio_status()
+                        bot.execute()
+                        last_executed[k] = start
+                except Exception as e:
+                    logger.error(f"[{bot.symbol}] 오류: {e}")
+                    send_error_alert(bot.symbol, str(e))
+                    import traceback
+                    traceback.print_exc()
+            
+            next_times = [get_next_candle_time(get_candle_start_time(now, b.timeframe), b.timeframe) for b in bots]
+            next_run = min(next_times)
+            sleep_sec = (next_run - now).total_seconds() + CANDLE_START_DELAY
+            if sleep_sec > 0:
+                logger.info(f"\n⏰ 다음: {next_run.strftime('%H:%M:%S')} UTC ({sleep_sec/60:.1f}분)")
+                while sleep_sec > 0:
+                    time.sleep(min(sleep_sec, 300))
+                    sleep_sec -= 300
+            else:
+                time.sleep(RETRY_INTERVAL)
+    except KeyboardInterrupt:
+        logger.info("\n👋 종료")
+        send_telegram("🛑 <b>Bitget 선물봇 종료</b>")
+
+
+if __name__ == "__main__":
+    main()
