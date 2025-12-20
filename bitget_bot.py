@@ -1,12 +1,13 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.2 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.3 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
 - 지정가 5회 실패 시 시장가 전환
 - 텔레그램 실시간 알림
 - [v3.2] 자금 배분 로직 개선: 가용 잔고 기반 동적 계산
+- [v3.3] 종료 시 텔레그램 알림 (kill, Ctrl+C 등)
 ================================================================================
 """
 
@@ -16,6 +17,9 @@ import hashlib
 import base64
 import time
 import json
+import sys
+import signal
+import atexit
 import pandas as pd
 import numpy as np
 from datetime import datetime, timezone, timedelta
@@ -116,6 +120,13 @@ LOG_LEVEL = logging.INFO
 LOG_FILE = "trading_bot_binance_signal.log"
 CANDLE_START_DELAY = 10
 RETRY_INTERVAL = 60
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 종료 알림 관련 전역 변수
+# ═══════════════════════════════════════════════════════════════════════════════
+
+BOT_START_TIME = None
+SHUTDOWN_SENT = False
 
 # 로깅
 def setup_logging():
@@ -265,6 +276,42 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     send_telegram(msg)
 
 
+def send_shutdown_alert(reason: str = "수동 종료"):
+    """봇 종료 알림"""
+    global SHUTDOWN_SENT
+    
+    if SHUTDOWN_SENT:
+        return
+    SHUTDOWN_SENT = True
+    
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    if BOT_START_TIME:
+        uptime = datetime.now() - BOT_START_TIME
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if days > 0:
+            uptime_str = f"{days}일 {hours}시간 {minutes}분"
+        elif hours > 0:
+            uptime_str = f"{hours}시간 {minutes}분"
+        else:
+            uptime_str = f"{minutes}분 {seconds}초"
+    else:
+        uptime_str = "알 수 없음"
+    
+    msg = f"🛑 <b>Bitget 선물봇 종료</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📋 종료 사유: {reason}\n"
+    msg += f"⏱️ 실행 시간: {uptime_str}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+    logger.info(f"종료 알림 전송 완료: {reason}")
+
+
 def send_portfolio_alert(total_equity: float, available: float, pnl: float, positions: List[Dict]):
     """포트폴리오 현황 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -292,6 +339,44 @@ def send_portfolio_alert(total_equity: float, available: float, pnl: float, posi
     msg += f"🕐 {now}"
     
     send_telegram(msg)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 종료 핸들러 설정
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def signal_handler(signum, frame):
+    """시그널 핸들러"""
+    signal_names = {
+        signal.SIGINT: "SIGINT (Ctrl+C)",
+        signal.SIGTERM: "SIGTERM (kill)",
+    }
+    if hasattr(signal, 'SIGHUP'):
+        signal_names[signal.SIGHUP] = "SIGHUP (터미널 종료)"
+    
+    signal_name = signal_names.get(signum, f"Signal {signum}")
+    
+    logger.info(f"종료 시그널 수신: {signal_name}")
+    send_shutdown_alert(reason=signal_name)
+    
+    sys.exit(0)
+
+
+def exit_handler():
+    """프로그램 종료 시 호출"""
+    send_shutdown_alert(reason="프로그램 종료")
+
+
+def setup_shutdown_handlers():
+    """종료 핸들러 설정"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal_handler)
+    
+    atexit.register(exit_handler)
+    logger.info("종료 핸들러 설정 완료")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -716,7 +801,7 @@ class PortfolioManager:
         total_slots = len(self.configs)
         
         logger.info(f"\n{'='*70}")
-        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.2]")
+        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.3]")
         logger.info(f"{'='*70}")
         logger.info(f"   총 자산: {equity:,.2f} USDT")
         logger.info(f"   가용 잔고: {available:,.2f} USDT")
@@ -1257,8 +1342,9 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.2 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("📊 Bitget 자동매매 봇 v3.3 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.2] 자금 배분 개선: 가용 잔고 기반 동적 계산")
+    print("   [v3.3] 종료 핸들러 추가: kill, Ctrl+C 시 텔레그램 알림")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
@@ -1275,6 +1361,14 @@ def print_config():
 
 
 def main():
+    global BOT_START_TIME
+    
+    # 봇 시작 시간 기록
+    BOT_START_TIME = datetime.now()
+    
+    # 종료 핸들러 설정
+    setup_shutdown_handlers()
+    
     print_config()
     
     key, secret, pw = load_api_credentials()
@@ -1366,8 +1460,8 @@ def main():
             else:
                 time.sleep(RETRY_INTERVAL)
     except KeyboardInterrupt:
-        logger.info("\n👋 종료")
-        send_telegram("🛑 <b>Bitget 선물봇 종료</b>")
+        logger.info("\n👋 Ctrl+C로 종료")
+        send_shutdown_alert(reason="Ctrl+C")
 
 
 if __name__ == "__main__":
