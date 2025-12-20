@@ -1,16 +1,20 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.0 (개선판)
+업비트 자동매매 봇 v2.1 (종료 알림 추가)
 ================================================================================
 개선 사항:
 1. 자금 배분 로직 수정 - KRW 잔고 기반 계산으로 잔고 부족 오류 방지
 2. 스토캐스틱 캐시 개선 - 일봉 마감(09:00) 기준 하루 1회 갱신
 3. 역방향 상태 파일 저장 - 봇 재시작 시 데이터 손실 방지
+4. [신규] 종료 시 텔레그램 알림 전송
 ================================================================================
 """
 
 import os
+import sys
 import time
+import signal
+import atexit
 import schedule
 import numpy as np
 import pandas as pd
@@ -36,7 +40,7 @@ logging.basicConfig(level=logging.INFO,
                     ])
 
 # ============================================================
-# API 설정 (환경변수 사용)
+# API 설정 (환경변수에서 로드)
 # ============================================================
 
 ACCESS_KEY = os.getenv("UPBIT_ACCESS_KEY")
@@ -57,6 +61,13 @@ if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
 
 STATUS_FILE = os.path.join(os.path.expanduser('~'), 'trading_status.json')
 STOCH_CACHE_FILE = os.path.join(os.path.expanduser('~'), 'stoch_cache.json')
+
+# ============================================================
+# 종료 알림 관련 전역 변수
+# ============================================================
+
+BOT_START_TIME = None
+SHUTDOWN_SENT = False
 
 # ============================================================
 # 텔레그램 알림 함수
@@ -173,6 +184,83 @@ def send_start_alert(status_loaded=False):
     send_telegram(msg)
 
 
+def send_shutdown_alert(reason="수동 종료"):
+    """봇 종료 알림"""
+    global SHUTDOWN_SENT
+    
+    if SHUTDOWN_SENT:
+        return
+    SHUTDOWN_SENT = True
+    
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    if BOT_START_TIME:
+        uptime = datetime.now() - BOT_START_TIME
+        days = uptime.days
+        hours, remainder = divmod(uptime.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        if days > 0:
+            uptime_str = f"{days}일 {hours}시간 {minutes}분"
+        elif hours > 0:
+            uptime_str = f"{hours}시간 {minutes}분"
+        else:
+            uptime_str = f"{minutes}분 {seconds}초"
+    else:
+        uptime_str = "알 수 없음"
+    
+    msg = f"🛑 <b>자동매매 봇 종료</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"📋 종료 사유: {reason}\n"
+    msg += f"⏱️ 실행 시간: {uptime_str}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}"
+    
+    send_telegram(msg)
+    logging.info(f"종료 알림 전송 완료: {reason}")
+
+
+# ============================================================
+# 종료 핸들러 설정
+# ============================================================
+
+def signal_handler(signum, frame):
+    """시그널 핸들러"""
+    signal_names = {
+        signal.SIGINT: "SIGINT (Ctrl+C)",
+        signal.SIGTERM: "SIGTERM (kill)",
+    }
+    signal_name = signal_names.get(signum, f"Signal {signum}")
+    
+    logging.info(f"종료 시그널 수신: {signal_name}")
+    send_shutdown_alert(reason=signal_name)
+    
+    try:
+        save_status()
+        logging.info("상태 저장 완료")
+    except Exception as e:
+        logging.error(f"상태 저장 실패: {e}")
+    
+    sys.exit(0)
+
+
+def exit_handler():
+    """프로그램 종료 시 호출"""
+    send_shutdown_alert(reason="프로그램 종료")
+
+
+def setup_shutdown_handlers():
+    """종료 핸들러 설정"""
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    if hasattr(signal, 'SIGHUP'):
+        signal.signal(signal.SIGHUP, signal_handler)
+    
+    atexit.register(exit_handler)
+    logging.info("종료 핸들러 설정 완료")
+
+
 # ============================================================
 # Upbit 클라이언트 초기화
 # ============================================================
@@ -264,11 +352,11 @@ buy_status = {}
 
 # 스토캐스틱 캐시
 stoch_cache = {}
-stoch_cache_date = None  # 캐시 날짜 (date 객체)
+stoch_cache_date = None
 
 
 # ============================================================
-# [개선1] 상태 저장/로드 함수 - 봇 재시작 시 데이터 손실 방지
+# 상태 저장/로드 함수
 # ============================================================
 
 def save_status():
@@ -382,7 +470,7 @@ def initialize_status():
 
 
 # ============================================================
-# [개선2] 자금 배분 로직 - KRW 잔고 기반 계산
+# 자금 배분 로직
 # ============================================================
 
 def get_krw_balance():
@@ -459,11 +547,7 @@ def count_empty_slots():
 
 
 def calculate_invest_amount():
-    """
-    [개선] KRW 잔고 기반 투자금액 계산
-    - 실제 KRW 잔고를 기준으로 계산하여 잔고 부족 오류 방지
-    - 수수료(0.5%) 고려
-    """
+    """KRW 잔고 기반 투자금액 계산"""
     krw_balance = get_krw_balance()
     empty_slots = count_empty_slots()
     
@@ -471,13 +555,9 @@ def calculate_invest_amount():
         logging.info("매수 가능한 빈 슬롯이 없습니다.")
         return 0
     
-    # 수수료 0.5% 고려하여 99.5%만 사용
     available_krw = krw_balance * 0.995
-    
-    # 빈 슬롯 수로 나누어 코인당 투자금액 계산
     invest_amount = available_krw / empty_slots
     
-    # 최소 주문 금액 (5000원) 체크
     if invest_amount < 5000:
         logging.warning(f"투자금액({invest_amount:,.0f}원)이 최소 주문금액(5000원) 미만입니다.")
         return 0
@@ -561,7 +641,7 @@ def get_daily_ohlcv(ticker, count):
 
 
 # ============================================================
-# [개선3] 스토캐스틱 캐시 개선 - 일봉 마감(09:00) 기준 하루 1회 갱신
+# 스토캐스틱 캐시
 # ============================================================
 
 def calculate_stochastic(df, k_period, k_smooth, d_period):
@@ -583,22 +663,16 @@ def calculate_stochastic(df, k_period, k_smooth, d_period):
 
 
 def should_refresh_stoch_cache():
-    """
-    [개선] 스토캐스틱 캐시 갱신 필요 여부 확인
-    - 일봉 기준이므로 하루에 한 번만 갱신
-    - 업비트 일봉 마감 시간(09:00 KST) 이후 첫 실행 시 갱신
-    """
+    """스토캐스틱 캐시 갱신 필요 여부 확인"""
     global stoch_cache_date
     
     now = datetime.now()
     today = now.date()
     
-    # 캐시가 없으면 갱신 필요
     if stoch_cache_date is None:
         logging.info("스토캐스틱 캐시가 없습니다. 새로 생성합니다.")
         return True
     
-    # 09:05 이후이고, 캐시 날짜가 오늘이 아니면 갱신
     today_9am = now.replace(hour=9, minute=5, second=0, microsecond=0)
     
     if now >= today_9am and stoch_cache_date < today:
@@ -643,28 +717,21 @@ def refresh_all_stochastic():
             logging.error(f"{ticker} 스토캐스틱 계산 중 오류: {e}")
     
     stoch_cache_date = datetime.now().date()
-    save_stoch_cache()  # 캐시 저장
+    save_stoch_cache()
     
     logging.info(f"📊 스토캐스틱 데이터 갱신 완료: {len(stoch_cache)}개 코인")
 
 
 def get_stochastic_signal(ticker):
-    """
-    [개선] 스토캐스틱 시그널 조회
-    - 캐시된 데이터 사용
-    - 필요시에만 전체 갱신
-    """
+    """스토캐스틱 시그널 조회"""
     global stoch_cache
     
-    # 캐시 갱신 필요 여부 확인
     if should_refresh_stoch_cache():
         refresh_all_stochastic()
     
-    # 캐시에서 데이터 반환
     if ticker in stoch_cache:
         return stoch_cache[ticker]
     
-    # 캐시에 없으면 개별 조회
     try:
         params = STOCH_PARAMS.get(ticker)
         if not params:
@@ -700,16 +767,14 @@ def get_stochastic_signal(ticker):
 # ============================================================
 
 def calculate_error_rate(price, ma_price):
-    """오차율 계산: (가격 - 이동평균) / 이동평균 * 100"""
+    """오차율 계산"""
     if ma_price is None or ma_price <= 0:
         return 0
     return ((price - ma_price) / ma_price) * 100
 
 
 def check_reverse_strategy(ticker, opening_price_4h, ma_price):
-    """
-    역방향 전략 체크 (상태 저장 포함)
-    """
+    """역방향 전략 체크"""
     global buy_status
     
     if ticker not in REVERSE_ERROR_RATE_CONFIG:
@@ -717,23 +782,21 @@ def check_reverse_strategy(ticker, opening_price_4h, ma_price):
     
     config = REVERSE_ERROR_RATE_CONFIG[ticker]
     error_rate_threshold = config['error_rate']
-    hold_duration_hours = config['hold_hours'] * 4  # 4시간봉 기준
+    hold_duration_hours = config['hold_hours'] * 4
     
     current_time = datetime.now()
     error_rate = calculate_error_rate(opening_price_4h, ma_price)
     
-    # 현재 역방향 보유 중인지 확인
     if buy_status[ticker]['is_reverse_holding']:
         start_time = buy_status[ticker]['reverse_start_time']
         if start_time:
             elapsed_hours = (current_time - start_time).total_seconds() / 3600
             
             if elapsed_hours >= hold_duration_hours:
-                # 보유 기간 종료
                 buy_status[ticker]['is_reverse_holding'] = False
                 buy_status[ticker]['reverse_start_time'] = None
                 buy_status[ticker]['reverse_hold_hours'] = 0
-                save_status()  # 상태 저장
+                save_status()
                 
                 logging.info(f"🔚 {ticker} 역방향 보유 기간 종료 (경과: {elapsed_hours:.1f}시간 / 설정: {hold_duration_hours}시간)")
                 return False, False, error_rate
@@ -742,12 +805,11 @@ def check_reverse_strategy(ticker, opening_price_4h, ma_price):
                 logging.info(f"⏳ {ticker} 역방향 보유 중 - 남은시간: {remaining:.1f}시간")
                 return True, True, error_rate
     
-    # 새로운 역방향 매수 신호 체크
     if opening_price_4h < ma_price and error_rate <= error_rate_threshold:
         buy_status[ticker]['is_reverse_holding'] = True
         buy_status[ticker]['reverse_start_time'] = current_time
         buy_status[ticker]['reverse_hold_hours'] = hold_duration_hours
-        save_status()  # 상태 저장
+        save_status()
         
         logging.info(f"🔴 {ticker} 역방향 매수 신호 발생!")
         logging.info(f"   오차율: {error_rate:.2f}% (임계값: {error_rate_threshold}%)")
@@ -765,7 +827,6 @@ def check_reverse_strategy(ticker, opening_price_4h, ma_price):
 def trade_strategy():
     """거래 전략 실행"""
     try:
-        # [개선] KRW 잔고 기반 투자금액 계산
         krw_balance = get_krw_balance()
         total_asset = get_total_asset()
         
@@ -781,7 +842,6 @@ def trade_strategy():
         for ticker in COINS:
             time.sleep(0.2)
             
-            # 데이터 조회
             opening_price_4h = get_opening_price_4h(ticker)
             time.sleep(0.1)
             
@@ -801,17 +861,12 @@ def trade_strategy():
             coin_currency = ticker.split('-')[1]
             current_balance = upbit.get_balance(coin_currency)
             
-            # ============== 전략 판단 =============
-            
-            # 1. 역방향 전략 체크
             reverse_signal, is_reverse_holding, error_rate = check_reverse_strategy(
                 ticker, opening_price_4h, ma_price
             )
             
-            # 2. MA 조건
             ma_condition = opening_price_4h > ma_price
             
-            # 3. 스토캐스틱 조건
             if stoch_data and stoch_data.get('signal') is not None:
                 stoch_condition = stoch_data['signal']
                 slow_k = stoch_data['slow_k']
@@ -821,7 +876,6 @@ def trade_strategy():
                 slow_k = None
                 slow_d = None
             
-            # 4. 최종 조건 결정
             if is_reverse_holding:
                 final_buy_condition = True
                 strategy_type = "역방향"
@@ -832,7 +886,6 @@ def trade_strategy():
                 final_buy_condition = False
                 strategy_type = "없음"
             
-            # 로깅
             stoch_str = f"K:{slow_k:.1f}/D:{slow_d:.1f}" if slow_k is not None else "N/A"
             reverse_str = "보유중" if is_reverse_holding else ("신호" if reverse_signal else "X")
             
@@ -841,11 +894,8 @@ def trade_strategy():
                         f"MA:{ma_condition} | Stoch:{stoch_condition} | 역방향:{reverse_str} | "
                         f"최종:{final_buy_condition} ({strategy_type})")
             
-            # ============== 매매 실행 =============
-            
             if final_buy_condition:
                 if current_balance == 0:
-                    # [개선] 매수 직전에 투자금액 재계산
                     invest_amount = calculate_invest_amount()
                     
                     if invest_amount < 5000:
@@ -917,7 +967,6 @@ def trade_strategy():
                     
                     logging.info(f"⬜ {ticker} 대기 중 ({', '.join(reasons)})")
         
-        # 거래 요약
         if buy_count > 0 or sell_count > 0:
             summary_msg = f"📋 <b>거래 실행 완료</b>\n"
             summary_msg += f"━━━━━━━━━━━━━━━\n"
@@ -931,7 +980,6 @@ def trade_strategy():
         logging.info(f"   매수: {buy_count}건 / 매도: {sell_count}건")
         logging.info("=" * 80)
         
-        # 상태 저장 (매 실행 후)
         save_status()
                 
     except Exception as e:
@@ -955,12 +1003,13 @@ def send_daily_report():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 업비트 자동매매 봇 v2.0 (개선판)")
+    logging.info("🤖 업비트 자동매매 봇 v2.1 (종료 알림 추가)")
     logging.info("=" * 80)
     logging.info("📦 개선 사항:")
     logging.info("   1. 자금 배분: KRW 잔고 기반 계산 (잔고 부족 방지)")
     logging.info("   2. 스토캐스틱: 일봉 마감(09:00) 후 1회 갱신")
     logging.info("   3. 상태 저장: 봇 재시작 시 역방향 상태 복원")
+    logging.info("   4. 종료 알림: Ctrl+C, kill 등 종료 시 텔레그램 알림")
     logging.info("-" * 80)
     logging.info("📈 상승 전략:")
     logging.info("   - 조건1: 4H 시가 > MA (4H봉 기준)")
@@ -985,19 +1034,21 @@ def log_strategy_info():
 
 def main():
     """메인 함수"""
-    # 상태 초기화
+    global BOT_START_TIME
+    
+    BOT_START_TIME = datetime.now()
+    
+    setup_shutdown_handlers()
+    
     initialize_status()
     
-    # [개선] 저장된 상태 로드
     status_loaded = load_status()
     load_stoch_cache()
     
     log_strategy_info()
     
-    # 텔레그램 시작 알림
     send_start_alert(status_loaded)
     
-    # 스케줄 설정 (4시간마다 실행)
     schedule.every().day.at("01:00").do(trade_strategy)
     schedule.every().day.at("05:00").do(trade_strategy)
     schedule.every().day.at("09:00").do(trade_strategy)
@@ -1005,7 +1056,6 @@ def main():
     schedule.every().day.at("17:00").do(trade_strategy)
     schedule.every().day.at("21:00").do(trade_strategy)
     
-    # 일일 리포트 스케줄
     schedule.every().day.at("09:05").do(send_daily_report)
     
     logging.info("자동매매 스크립트 시작")
@@ -1014,7 +1064,6 @@ def main():
     logging.info(f"상태 저장 파일: {STATUS_FILE}")
     logging.info(f"캐시 저장 파일: {STOCH_CACHE_FILE}")
     
-    # 시작 시 즉시 한 번 실행
     logging.info("🚀 시작 시 전략 즉시 실행...")
     trade_strategy()
     
