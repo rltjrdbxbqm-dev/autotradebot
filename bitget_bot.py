@@ -44,7 +44,7 @@ TRADING_CONFIGS = [
         'symbol': 'BTCUSDT',
         'product_type': 'USDT-FUTURES',
         'margin_coin': 'USDT',
-        'ma_period': 248,
+        'ma_period': 216,
         'ma_type': 'SMA',
         'timeframe': '4H',
         'stoch_k_period': 46,
