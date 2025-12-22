@@ -1,13 +1,11 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.2 (베이지안 최적화 파라미터 적용)
+업비트 자동매매 봇 v2.2.1 (최적화 파라미터 + 오류 수정판)
 ================================================================================
-개선 사항:
-1. 자금 배분 로직 수정 - KRW 잔고 기반 계산으로 잔고 부족 오류 방지
-2. 스토캐스틱 캐시 개선 - 일봉 마감(09:00) 기준 하루 1회 갱신
-3. 역방향 상태 파일 저장 - 봇 재시작 시 데이터 손실 방지
-4. [신규] 종료 시 텔레그램 알림 전송
-5. [v2.2] 베이지안 최적화 파라미터 적용 (MA, 스토캐스틱, 역방향 전략)
+수정 내역:
+1. 베이지안 최적화 파라미터(MA, Stoch, Reverse) 전체 적용
+2. [Fix] 스토캐스틱 N/A 문제 해결 (pyupbit.get_ohlcv로 200개 이상 데이터 조회)
+3. [Fix] JSON 저장 오류 해결 (NumPy 타입 -> Python 기본 타입 형변환)
 ================================================================================
 """
 
@@ -19,7 +17,8 @@ import atexit
 import schedule
 import numpy as np
 import pandas as pd
-from pyupbit import Upbit
+import pyupbit  # pyupbit 라이브러리 전체 임포트 (데이터 조회용)
+from pyupbit import Upbit # 주문용 클래스
 import requests
 import json
 from datetime import datetime, timedelta
@@ -89,7 +88,6 @@ def send_telegram(message):
         }
         response = requests.post(url, data=data, timeout=10)
         if response.status_code == 200:
-            logging.info("텔레그램 알림 전송 성공")
             return True
         else:
             logging.error(f"텔레그램 전송 실패: {response.text}")
@@ -172,11 +170,11 @@ def send_start_alert(status_loaded=False):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>자동매매 봇 시작</b>\n"
+    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.1)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 전략: MA + 스토캐스틱 + 역방향\n"
     msg += f"🪙 대상: {len(COINS)}개 코인\n"
-    msg += f"⏰ 실행: 4시간 간격\n"
+    msg += f"⚙️ 설정: 베이지안 최적화 적용됨\n"
     if status_loaded:
         msg += f"📂 이전 상태: 복원됨\n"
     msg += f"━━━━━━━━━━━━━━━\n"
@@ -325,7 +323,6 @@ STOCH_PARAMS = {
 }
 
 # 역방향 전략 설정 - 베이지안 최적화 결과 적용
-# hold_hours: 4H 캔들 수 (예: 84 = 84*4 = 336시간)
 REVERSE_ERROR_RATE_CONFIG = {
     'KRW-ADA': {'error_rate': -25, 'hold_hours': 84},    # 기존 (-38, 56) → 최적화
     'KRW-ANKR': {'error_rate': -20, 'hold_hours': 44},   # 기존 (-51, 59)
@@ -419,7 +416,7 @@ def load_status():
 
 
 def save_stoch_cache():
-    """스토캐스틱 캐시를 파일에 저장"""
+    """스토캐스틱 캐시를 파일에 저장 (JSON 직렬화 오류 수정)"""
     global stoch_cache, stoch_cache_date
     try:
         save_data = {
@@ -620,21 +617,12 @@ def get_hourly_ma(ticker, period):
 
 
 def get_daily_ohlcv(ticker, count):
-    """1일봉 OHLCV 데이터 조회"""
+    """1일봉 OHLCV 데이터 조회 (pyupbit 사용으로 200개 제한 해결)"""
     try:
-        url = f"https://api.upbit.com/v1/candles/days?market={ticker}&count={count}"
-        response = requests.get(url)
-        response.raise_for_status()
-        data = response.json()
-        if data:
-            df = pd.DataFrame(data)
-            df = df.rename(columns={
-                'opening_price': 'open',
-                'high_price': 'high',
-                'low_price': 'low',
-                'trade_price': 'close'
-            })
-            df = df[['open', 'high', 'low', 'close']].iloc[::-1].reset_index(drop=True)
+        # pyupbit.get_ohlcv는 count가 200을 넘으면 자동으로 반복 요청을 처리해줍니다.
+        df = pyupbit.get_ohlcv(ticker, interval="day", count=count)
+        
+        if df is not None:
             return df
         return None
     except Exception as e:
@@ -685,7 +673,7 @@ def should_refresh_stoch_cache():
 
 
 def refresh_all_stochastic():
-    """모든 코인의 스토캐스틱 데이터 갱신"""
+    """모든 코인의 스토캐스틱 데이터 갱신 (형변환 추가)"""
     global stoch_cache, stoch_cache_date
     
     logging.info("📊 스토캐스틱 데이터 전체 갱신 시작...")
@@ -696,7 +684,8 @@ def refresh_all_stochastic():
             if not params:
                 params = {'k_period': 200, 'k_smooth': 60, 'd_period': 30}
             
-            required_count = params['k_period'] + params['k_smooth'] + params['d_period'] + 10
+            # 여유분을 20으로 늘림 (안전성 확보)
+            required_count = params['k_period'] + params['k_smooth'] + params['d_period'] + 20
             df = get_daily_ohlcv(ticker, required_count)
             
             if df is None:
@@ -707,9 +696,9 @@ def refresh_all_stochastic():
             
             if slow_k is not None and slow_d is not None:
                 stoch_cache[ticker] = {
-                    'signal': slow_k > slow_d,
-                    'slow_k': slow_k,
-                    'slow_d': slow_d
+                    'signal': bool(slow_k > slow_d),  # numpy.bool_ -> bool
+                    'slow_k': float(slow_k),          # numpy.float -> float
+                    'slow_d': float(slow_d)           # numpy.float -> float
                 }
                 logging.debug(f"{ticker} 스토캐스틱: K={slow_k:.2f}, D={slow_d:.2f}, Signal={slow_k > slow_d}")
             
@@ -725,7 +714,7 @@ def refresh_all_stochastic():
 
 
 def get_stochastic_signal(ticker):
-    """스토캐스틱 시그널 조회"""
+    """스토캐스틱 시그널 조회 (형변환 추가)"""
     global stoch_cache
     
     if should_refresh_stoch_cache():
@@ -739,7 +728,7 @@ def get_stochastic_signal(ticker):
         if not params:
             params = {'k_period': 200, 'k_smooth': 60, 'd_period': 30}
         
-        required_count = params['k_period'] + params['k_smooth'] + params['d_period'] + 10
+        required_count = params['k_period'] + params['k_smooth'] + params['d_period'] + 20
         df = get_daily_ohlcv(ticker, required_count)
         
         if df is None:
@@ -751,9 +740,9 @@ def get_stochastic_signal(ticker):
             return None
         
         result = {
-            'signal': slow_k > slow_d,
-            'slow_k': slow_k,
-            'slow_d': slow_d
+            'signal': bool(slow_k > slow_d),  # numpy.bool_ -> bool
+            'slow_k': float(slow_k),          # numpy.float -> float
+            'slow_d': float(slow_d)           # numpy.float -> float
         }
         
         stoch_cache[ticker] = result
@@ -1005,13 +994,12 @@ def send_daily_report():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 업비트 자동매매 봇 v2.1 (종료 알림 추가)")
+    logging.info("🤖 업비트 자동매매 봇 v2.2.1 (최적화 + 오류수정)")
     logging.info("=" * 80)
     logging.info("📦 개선 사항:")
-    logging.info("   1. 자금 배분: KRW 잔고 기반 계산 (잔고 부족 방지)")
-    logging.info("   2. 스토캐스틱: 일봉 마감(09:00) 후 1회 갱신")
-    logging.info("   3. 상태 저장: 봇 재시작 시 역방향 상태 복원")
-    logging.info("   4. 종료 알림: Ctrl+C, kill 등 종료 시 텔레그램 알림")
+    logging.info("   1. 베이지안 최적화 파라미터 적용 (MA, Stoch, Reverse)")
+    logging.info("   2. [FIX] 스토캐스틱 N/A 문제 해결 (데이터 200개 제한 해제)")
+    logging.info("   3. [FIX] JSON 저장 오류 해결 (NumPy 타입 형변환)")
     logging.info("-" * 80)
     logging.info("📈 상승 전략:")
     logging.info("   - 조건1: 4H 시가 > MA (4H봉 기준)")
