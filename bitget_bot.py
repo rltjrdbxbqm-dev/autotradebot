@@ -54,7 +54,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.1,
         'size_decimals': 4,
-        'allocation_pct': 23.3,
+        'allocation_pct': 30.0,
         'position_size_pct': 95,
         'description': 'BTC MA248 + Stoch(46,37,4) Lev 4x/Cash'
     },
@@ -73,7 +73,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.01,
         'size_decimals': 2,
-        'allocation_pct': 23.3,
+        'allocation_pct': 30.0,
         'position_size_pct': 95,
         'description': 'ETH MA152 + Stoch(58,23,18) Lev 4x/Cash'
     },
@@ -92,7 +92,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.001,
         'size_decimals': 1,
-        'allocation_pct': 23.3,
+        'allocation_pct': 30.0,
         'position_size_pct': 95,
         'description': 'SOL MA64 + Stoch(51,20,16) Lev 2x/Cash'
     },
@@ -100,101 +100,6 @@ TRADING_CONFIGS = [
     # 고성과 알트코인 - 각 5% 배분 (총 30%)
     # 백테스트 기반 최적 파라미터 적용
     # ═══════════════════════════════════════════════════════════════════════════
-    {
-        'enabled': True,
-        'symbol': 'MOODENGUSDT',
-        'product_type': 'USDT-FUTURES',
-        'margin_coin': 'USDT',
-        'ma_period': 120,
-        'ma_type': 'SMA',
-        'timeframe': '4H',
-        'stoch_k_period': 130,
-        'stoch_k_smooth': 20,
-        'stoch_d_period': 30,
-        'leverage_up': 4,
-        'leverage_down': 0,
-        'tick_size': 0.00001,
-        'size_decimals': 0,
-        'allocation_pct': 5.0,
-        'position_size_pct': 95,
-        'description': 'MOODENG MA120 + Stoch(130,20,30) Lev 4x/Cash'
-    },
-    {
-        'enabled': True,
-        'symbol': 'PENGUUSDT',
-        'product_type': 'USDT-FUTURES',
-        'margin_coin': 'USDT',
-        'ma_period': 260,
-        'ma_type': 'SMA',
-        'timeframe': '4H',
-        'stoch_k_period': 60,
-        'stoch_k_smooth': 15,
-        'stoch_d_period': 15,
-        'leverage_up': 5,
-        'leverage_down': 0,
-        'tick_size': 0.00001,
-        'size_decimals': 0,
-        'allocation_pct': 5.0,
-        'position_size_pct': 95,
-        'description': 'PENGU MA260 + Stoch(60,15,15) Lev 5x/Cash'
-    },
-    {
-        'enabled': True,
-        'symbol': 'DRIFTUSDT',
-        'product_type': 'USDT-FUTURES',
-        'margin_coin': 'USDT',
-        'ma_period': 50,
-        'ma_type': 'SMA',
-        'timeframe': '4H',
-        'stoch_k_period': 175,
-        'stoch_k_smooth': 60,
-        'stoch_d_period': 5,
-        'leverage_up': 5,
-        'leverage_down': 0,
-        'tick_size': 0.0001,
-        'size_decimals': 1,
-        'allocation_pct': 5.0,
-        'position_size_pct': 95,
-        'description': 'DRIFT MA50 + Stoch(175,60,5) Lev 5x/Cash'
-    },
-    {
-        'enabled': True,
-        'symbol': 'VIRTUALUSDT',
-        'product_type': 'USDT-FUTURES',
-        'margin_coin': 'USDT',
-        'ma_period': 80,
-        'ma_type': 'SMA',
-        'timeframe': '4H',
-        'stoch_k_period': 75,
-        'stoch_k_smooth': 20,
-        'stoch_d_period': 30,
-        'leverage_up': 3,
-        'leverage_down': 0,
-        'tick_size': 0.0001,
-        'size_decimals': 1,
-        'allocation_pct': 5.0,
-        'position_size_pct': 95,
-        'description': 'VIRTUAL MA80 + Stoch(75,20,30) Lev 3x/Cash'
-    },
-    {
-        'enabled': True,
-        'symbol': 'AEROUSDT',
-        'product_type': 'USDT-FUTURES',
-        'margin_coin': 'USDT',
-        'ma_period': 90,
-        'ma_type': 'SMA',
-        'timeframe': '4H',
-        'stoch_k_period': 130,
-        'stoch_k_smooth': 35,
-        'stoch_d_period': 25,
-        'leverage_up': 4,
-        'leverage_down': 0,
-        'tick_size': 0.0001,
-        'size_decimals': 1,
-        'allocation_pct': 5.0,
-        'position_size_pct': 95,
-        'description': 'AERO MA90 + Stoch(130,35,25) Lev 4x/Cash'
-    },
     {
         'enabled': True,
         'symbol': 'SUIUSDT',
@@ -210,7 +115,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.0001,
         'size_decimals': 1,
-        'allocation_pct': 5.0,
+        'allocation_pct': 10.0,
         'position_size_pct': 95,
         'description': 'SUI MA140 + Stoch(90,40,5) Lev 3x/Cash'
     },
@@ -221,6 +126,7 @@ LIMIT_ORDER_TICKS = 1
 ORDER_WAIT_SECONDS = 5
 MAX_LIMIT_RETRY = 5
 RETRY_DELAY_SECONDS = 1
+SYMBOL_DELAY_SECONDS = 2  # 코인 간 API 호출 딜레이 (Rate Limit 방지)
 
 # API 설정 (환경변수 사용)
 API_KEY = os.getenv("BITGET_ACCESS_KEY")
@@ -646,7 +552,7 @@ class BitgetClient:
             'locale': 'en-US'
         }
     
-    def _request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None) -> Dict:
+    def _request(self, method: str, endpoint: str, params: Dict = None, body: Dict = None, retry_count: int = 3) -> Dict:
         url = self.base_url + endpoint
         request_path = endpoint
         
@@ -656,21 +562,50 @@ class BitgetClient:
             url = url + '?' + qs
         
         body_str = json.dumps(body, separators=(',', ':')) if body else ""
-        headers = self._get_headers(method, request_path, body_str)
         
-        try:
-            if method == 'GET':
-                resp = self.session.get(url, headers=headers, timeout=30)
-            else:
-                resp = self.session.post(url, headers=headers, data=body_str, timeout=30)
-            data = resp.json()
-            if data.get('code') != '00000':
-                logger.error(f"API 오류: {data}")
+        # 심볼 추출 (에러 알림용)
+        symbol = params.get('symbol', '') if params else ''
+        if body:
+            symbol = body.get('symbol', symbol)
+        
+        for attempt in range(retry_count):
+            headers = self._get_headers(method, request_path, body_str)
+            
+            try:
+                if method == 'GET':
+                    resp = self.session.get(url, headers=headers, timeout=30)
+                else:
+                    resp = self.session.post(url, headers=headers, data=body_str, timeout=30)
+                data = resp.json()
+                
+                # Rate Limit 처리 (429)
+                if data.get('code') == '429':
+                    wait_time = (attempt + 1) * 2  # 2초, 4초, 6초...
+                    logger.warning(f"Rate Limit 발생, {wait_time}초 대기 후 재시도 ({attempt + 1}/{retry_count})")
+                    if attempt == 0:  # 첫 Rate Limit 시 텔레그램 알림
+                        send_error_alert(symbol or 'API', f"Rate Limit (429) 발생 - 재시도 중...")
+                    time.sleep(wait_time)
+                    continue
+                
+                if data.get('code') != '00000':
+                    error_msg = f"Code: {data.get('code')}, Msg: {data.get('msg', 'Unknown')}"
+                    logger.error(f"API 오류: {data}")
+                    send_error_alert(symbol or 'API', error_msg)
+                    return None
+                return data.get('data')
+            except Exception as e:
+                logger.error(f"API 요청 실패: {e}")
+                if attempt < retry_count - 1:
+                    time.sleep(1)
+                    continue
+                send_error_alert(symbol or 'API', f"API 요청 실패: {str(e)}")
                 return None
-            return data.get('data')
-        except Exception as e:
-            logger.error(f"API 요청 실패: {e}")
-            return None
+        
+        # 모든 재시도 실패
+        error_msg = f"API 요청 {retry_count}회 재시도 실패 (Rate Limit)"
+        logger.error(error_msg)
+        send_error_alert(symbol or 'API', error_msg)
+        return None
     
     def get_position_mode(self, product_type: str = 'USDT-FUTURES') -> str:
         if self._position_mode:
@@ -1187,7 +1122,18 @@ class TradingBot:
         return True
     
     def safe_limit_close(self, reason: str = "") -> bool:
-        pos = self.get_current_position()
+        # 포지션 조회 재시도 (Rate Limit 대비)
+        pos = None
+        for attempt in range(3):
+            pos = self.get_current_position()
+            if pos['side'] == 'long' and pos['size'] > 0:
+                break
+            elif pos['side'] is None and attempt < 2:
+                logger.warning(f"[{self.symbol}] 포지션 조회 재시도 ({attempt + 1}/3)...")
+                time.sleep(2)
+            else:
+                break
+        
         if pos['side'] != 'long' or pos['size'] <= 0:
             logger.info(f"[{self.symbol}] 청산할 포지션 없음")
             return True
@@ -1203,7 +1149,13 @@ class TradingBot:
             return True
         
         for retry in range(1, MAX_LIMIT_RETRY + 1):
-            pos = self.get_current_position()
+            # 현재 포지션 확인 (재시도 포함)
+            for attempt in range(3):
+                pos = self.get_current_position()
+                if pos is not None:
+                    break
+                time.sleep(1)
+            
             if pos['side'] != 'long' or pos['size'] <= 0:
                 logger.info(f"[{self.symbol}] ✅ 청산 완료{reason_str}")
                 ticker = self.client.get_ticker(self.symbol, self.product_type)
@@ -1526,8 +1478,10 @@ def main():
     logger.info(f"🔥 실행 즉시 거래 (1회)")
     logger.info(f"{'='*70}")
     portfolio.log_portfolio_status()
-    for bot in bots:
+    for i, bot in enumerate(bots):
         try:
+            if i > 0:
+                time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
             bot.show_status()
             bot.execute()
         except Exception as e:
@@ -1549,6 +1503,7 @@ def main():
     try:
         while True:
             now = datetime.now(timezone.utc)
+            executed_count = 0
             for bot in bots:
                 try:
                     start = get_candle_start_time(now, bot.timeframe)
@@ -1559,11 +1514,14 @@ def main():
                     if 0 <= elapsed <= 300:
                         if elapsed < CANDLE_START_DELAY:
                             time.sleep(CANDLE_START_DELAY - elapsed)
+                        if executed_count > 0:
+                            time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
                         logger.info(f"\n🕐 {bot.timeframe} 봉: {start}")
                         if bot == bots[0]:
                             portfolio.log_portfolio_status()
                         bot.execute()
                         last_executed[k] = start
+                        executed_count += 1
                 except Exception as e:
                     logger.error(f"[{bot.symbol}] 오류: {e}")
                     send_error_alert(bot.symbol, str(e))
