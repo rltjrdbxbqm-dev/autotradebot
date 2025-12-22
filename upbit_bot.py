@@ -272,12 +272,42 @@ upbit = Upbit(ACCESS_KEY, SECRET_KEY)
 # ============================================================
 # 1. 투자 대상 코인 설정 (변수명 COINS 유지 필수)
 # ============================================================
+# ============================================================
+# 1. 투자 대상 코인 설정 (총 32개, CAGR 순 정렬)
+# ============================================================
 COINS = [
-    'KRW-UNI', 'KRW-BONK', 'KRW-MNT', 'KRW-SUI', 'KRW-MOVE',
-    'KRW-AKT', 'KRW-IMX', 'KRW-ARB', 'KRW-GRT', 'KRW-AVAX',
-    'KRW-HBAR', 'KRW-NEAR', 'KRW-SOL', 'KRW-ADA', 'KRW-DOT',
-    'KRW-DOGE', 'KRW-ETH', 'KRW-POL', 'KRW-LINK', 'KRW-XRP',
-    'KRW-BTC'
+    'KRW-BONK',
+    'KRW-UNI',
+    'KRW-SUI',
+    'KRW-MNT',
+    'KRW-MOVE',
+    'KRW-AKT',
+    'KRW-IMX',
+    'KRW-ARB',
+    'KRW-VET',
+    'KRW-SAND',
+    'KRW-HBAR',
+    'KRW-GRT',
+    'KRW-AVAX',
+    'KRW-NEAR',
+    'KRW-SOL',
+    'KRW-THETA',
+    'KRW-MANA',
+    'KRW-XRP',
+    'KRW-ANKR',
+    'KRW-ADA',
+    'KRW-POL',
+    'KRW-CRO',
+    'KRW-DOT',
+    'KRW-MVL',
+    'KRW-ETH',
+    'KRW-WAXP',
+    'KRW-DOGE',
+    'KRW-XLM',
+    'KRW-LINK',
+    'KRW-AXS',
+    'KRW-BTC',
+    'KRW-BCH',
 ]
 
 # ============================================================
@@ -292,21 +322,32 @@ MA_PERIODS = {
     'KRW-MNT': 216,  # CAGR 594.7%
     'KRW-MOVE': 200,  # CAGR 382.2%
     'KRW-AKT': 68,  # CAGR 328.5%
-    'KRW-IMX': 137,  # CAGR 269.2%
+    'KRW-IMX': 116,  # CAGR 278.0%
     'KRW-ARB': 52,  # CAGR 267.5%
+    'KRW-VET': 46,  # CAGR 231.9%
+    'KRW-SAND': 234,  # CAGR 230.4%
     'KRW-HBAR': 76,  # CAGR 229.9%
     'KRW-GRT': 239,  # CAGR 229.9%
     'KRW-AVAX': 55,  # CAGR 226.5%
     'KRW-NEAR': 200,  # CAGR 188.5%
     'KRW-SOL': 60,  # CAGR 183.9%
+    'KRW-THETA': 221,  # CAGR 174.5%
+    'KRW-MANA': 195,  # CAGR 172.3%
+    'KRW-XRP': 100,  # CAGR 168.3%
+    'KRW-ANKR': 163,  # CAGR 163.9%
+    'KRW-ADA': 93,  # CAGR 162.6%
     'KRW-POL': 50,  # CAGR 156.8%
-    'KRW-ADA': 70,  # CAGR 147.4%
+    'KRW-CRO': 112,  # CAGR 154.5%
     'KRW-DOT': 52,  # CAGR 147.1%
+    'KRW-MVL': 298,  # CAGR 146.5%
     'KRW-ETH': 110,  # CAGR 140.0%
+    'KRW-WAXP': 56,  # CAGR 135.4%
     'KRW-DOGE': 70,  # CAGR 128.9%
+    'KRW-XLM': 66,  # CAGR 126.6%
     'KRW-LINK': 61,  # CAGR 119.1%
-    'KRW-XRP': 69,  # CAGR 112.7%
-    'KRW-BTC': 280,  # CAGR 96.0%
+    'KRW-AXS': 283,  # CAGR 107.3%
+    'KRW-BTC': 117,  # CAGR 104.3%
+    'KRW-BCH': 97,  # CAGR 80.4%
 }
 
 # STOCH_PARAMS
@@ -317,21 +358,32 @@ STOCH_PARAMS = {
     'KRW-MNT': {'k_period': 177, 'k_smooth': 23, 'd_period': 26},
     'KRW-MOVE': {'k_period': 70, 'k_smooth': 50, 'd_period': 30},
     'KRW-AKT': {'k_period': 142, 'k_smooth': 46, 'd_period': 13},
-    'KRW-IMX': {'k_period': 68, 'k_smooth': 15, 'd_period': 9},
+    'KRW-IMX': {'k_period': 58, 'k_smooth': 19, 'd_period': 14},
     'KRW-ARB': {'k_period': 118, 'k_smooth': 46, 'd_period': 23},
+    'KRW-VET': {'k_period': 101, 'k_smooth': 45, 'd_period': 8},
+    'KRW-SAND': {'k_period': 116, 'k_smooth': 27, 'd_period': 9},
     'KRW-HBAR': {'k_period': 159, 'k_smooth': 33, 'd_period': 5},
     'KRW-GRT': {'k_period': 107, 'k_smooth': 25, 'd_period': 4},
     'KRW-AVAX': {'k_period': 133, 'k_smooth': 35, 'd_period': 10},
     'KRW-NEAR': {'k_period': 160, 'k_smooth': 30, 'd_period': 25},
     'KRW-SOL': {'k_period': 180, 'k_smooth': 25, 'd_period': 5},
+    'KRW-THETA': {'k_period': 166, 'k_smooth': 57, 'd_period': 7},
+    'KRW-MANA': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
+    'KRW-XRP': {'k_period': 40, 'k_smooth': 22, 'd_period': 6},
+    'KRW-ANKR': {'k_period': 227, 'k_smooth': 60, 'd_period': 7},
+    'KRW-ADA': {'k_period': 178, 'k_smooth': 17, 'd_period': 26},
     'KRW-POL': {'k_period': 216, 'k_smooth': 28, 'd_period': 5},
-    'KRW-ADA': {'k_period': 90, 'k_smooth': 37, 'd_period': 12},
+    'KRW-CRO': {'k_period': 69, 'k_smooth': 46, 'd_period': 3},
     'KRW-DOT': {'k_period': 160, 'k_smooth': 33, 'd_period': 6},
+    'KRW-MVL': {'k_period': 40, 'k_smooth': 58, 'd_period': 8},
     'KRW-ETH': {'k_period': 211, 'k_smooth': 28, 'd_period': 11},
+    'KRW-WAXP': {'k_period': 103, 'k_smooth': 30, 'd_period': 6},
     'KRW-DOGE': {'k_period': 144, 'k_smooth': 39, 'd_period': 9},
+    'KRW-XLM': {'k_period': 39, 'k_smooth': 25, 'd_period': 12},
     'KRW-LINK': {'k_period': 113, 'k_smooth': 35, 'd_period': 3},
-    'KRW-XRP': {'k_period': 162, 'k_smooth': 22, 'd_period': 11},
-    'KRW-BTC': {'k_period': 150, 'k_smooth': 35, 'd_period': 5},
+    'KRW-AXS': {'k_period': 40, 'k_smooth': 32, 'd_period': 6},
+    'KRW-BTC': {'k_period': 171, 'k_smooth': 24, 'd_period': 5},
+    'KRW-BCH': {'k_period': 66, 'k_smooth': 29, 'd_period': 3},
 }
 
 # REVERSE_ERROR_RATE_CONFIG
@@ -342,21 +394,32 @@ REVERSE_ERROR_RATE_CONFIG = {
     'KRW-MNT': {'error_rate': -33, 'hold_hours': 19},
     'KRW-MOVE': {'error_rate': -25, 'hold_hours': 12},
     'KRW-AKT': {'error_rate': -19, 'hold_hours': 13},
-    'KRW-IMX': {'error_rate': -24, 'hold_hours': 24},
+    'KRW-IMX': {'error_rate': -26, 'hold_hours': 44},
     'KRW-ARB': {'error_rate': -17, 'hold_hours': 37},
+    'KRW-VET': {'error_rate': -19, 'hold_hours': 80},
+    'KRW-SAND': {'error_rate': -44, 'hold_hours': 403},
     'KRW-HBAR': {'error_rate': -16, 'hold_hours': 39},
     'KRW-GRT': {'error_rate': -34, 'hold_hours': 94},
     'KRW-AVAX': {'error_rate': -12, 'hold_hours': 19},
     'KRW-NEAR': {'error_rate': -25, 'hold_hours': 32},
     'KRW-SOL': {'error_rate': -65, 'hold_hours': 16},
+    'KRW-THETA': {'error_rate': -42, 'hold_hours': 138},
+    'KRW-MANA': {'error_rate': -54, 'hold_hours': 82},
+    'KRW-XRP': {'error_rate': -56, 'hold_hours': 217},
+    'KRW-ANKR': {'error_rate': -34, 'hold_hours': 120},
+    'KRW-ADA': {'error_rate': -28, 'hold_hours': 238},
     'KRW-POL': {'error_rate': -14, 'hold_hours': 35},
-    'KRW-ADA': {'error_rate': -33, 'hold_hours': 19},
+    'KRW-CRO': {'error_rate': -48, 'hold_hours': 207},
     'KRW-DOT': {'error_rate': -15, 'hold_hours': 39},
+    'KRW-MVL': {'error_rate': -60, 'hold_hours': 305},
     'KRW-ETH': {'error_rate': -41, 'hold_hours': 90},
+    'KRW-WAXP': {'error_rate': -67, 'hold_hours': 148},
     'KRW-DOGE': {'error_rate': -19, 'hold_hours': 98},
+    'KRW-XLM': {'error_rate': -49, 'hold_hours': 202},
     'KRW-LINK': {'error_rate': -25, 'hold_hours': 51},
-    'KRW-XRP': {'error_rate': -20, 'hold_hours': 37},
-    'KRW-BTC': {'error_rate': -35, 'hold_hours': 52},
+    'KRW-AXS': {'error_rate': -63, 'hold_hours': 217},
+    'KRW-BTC': {'error_rate': -31, 'hold_hours': 145},
+    'KRW-BCH': {'error_rate': -61, 'hold_hours': 43},
 }
 
 # 매수 상태 추적을 위한 글로벌 변수
