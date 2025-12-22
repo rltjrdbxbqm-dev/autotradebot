@@ -1,12 +1,13 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.1 (종료 알림 추가)
+업비트 자동매매 봇 v2.2 (베이지안 최적화 파라미터 적용)
 ================================================================================
 개선 사항:
 1. 자금 배분 로직 수정 - KRW 잔고 기반 계산으로 잔고 부족 오류 방지
 2. 스토캐스틱 캐시 개선 - 일봉 마감(09:00) 기준 하루 1회 갱신
 3. 역방향 상태 파일 저장 - 봇 재시작 시 데이터 손실 방지
 4. [신규] 종료 시 텔레그램 알림 전송
+5. [v2.2] 베이지안 최적화 파라미터 적용 (MA, 스토캐스틱, 역방향 전략)
 ================================================================================
 """
 
@@ -275,76 +276,77 @@ COINS = [
     'KRW-THETA', 'KRW-VET', 'KRW-WAXP', 'KRW-XLM', 'KRW-XRP',
 ]
 
-# 이동평균선 기간 설정 (4H봉 기준)
+# 이동평균선 기간 설정 (4H봉 기준) - 베이지안 최적화 결과 적용
 MA_PERIODS = {
-    'KRW-ADA': 83,
-    'KRW-ANKR': 253,
-    'KRW-AVAX': 99,
+    'KRW-ADA': 120,    # 기존 83 → 최적화 120 (CAGR 155.3%)
+    'KRW-ANKR': 180,   # 기존 253 → 최적화 180 (CAGR 233.7%)
+    'KRW-AVAX': 50,    # 기존 99 → 최적화 50 (CAGR 176.7%)
     'KRW-AXS': 276,
-    'KRW-BCH': 99,
-    'KRW-BTC': 276,
-    'KRW-CRO': 253,
-    'KRW-DOGE': 213,
-    'KRW-ETH': 201,
-    'KRW-HBAR': 180,
-    'KRW-IMX': 137,
-    'KRW-MANA': 190,
-    'KRW-MVL': 163,
-    'KRW-SAND': 52,
-    'KRW-SOL': 254,
+    'KRW-BCH': 100,    # 기존 99 → 최적화 100 (CAGR 78.4%)
+    'KRW-BTC': 110,    # 기존 276 → 최적화 110 (CAGR 102.2%)
+    'KRW-CRO': 90,     # 기존 253 → 최적화 90 (CAGR 175.4%)
+    'KRW-DOGE': 70,    # 기존 213 → 최적화 70 (CAGR 141.9%)
+    'KRW-ETH': 290,    # 기존 201 → 최적화 290 (CAGR 146.1%)
+    'KRW-HBAR': 80,    # 기존 180 → 최적화 80 (CAGR 232.6%)
+    'KRW-IMX': 140,    # 기존 137 → 최적화 140 (CAGR 282.1%)
+    'KRW-MANA': 220,   # 기존 190 → 최적화 220 (CAGR 173.1%)
+    'KRW-MVL': 240,    # 기존 163 → 최적화 240 (CAGR 130.2%)
+    'KRW-SAND': 290,   # 기존 52 → 최적화 290 (CAGR 239.2%)
+    'KRW-SOL': 230,    # 기존 254 → 최적화 230 (CAGR 156.2%)
     'KRW-THETA': 145,
-    'KRW-VET': 172,
+    'KRW-VET': 50,     # 기존 172 → 최적화 50 (CAGR 223.3%)
     'KRW-WAXP': 271,
-    'KRW-XLM': 115,
-    'KRW-XRP': 64,
+    'KRW-XLM': 80,     # 기존 115 → 최적화 80 (CAGR 139.3%)
+    'KRW-XRP': 100,    # 기존 64 → 최적화 100 (CAGR 162.3%)
 }
 
-# 스토캐스틱 파라미터 (1D봉 기준)
+# 스토캐스틱 파라미터 (1D봉 기준) - 베이지안 최적화 결과 적용
 STOCH_PARAMS = {
-    'KRW-ADA': {'k_period': 60, 'k_smooth': 25, 'd_period': 5},
-    'KRW-ANKR': {'k_period': 70, 'k_smooth': 25, 'd_period': 5},
-    'KRW-AVAX': {'k_period': 120, 'k_smooth': 20, 'd_period': 5},
+    'KRW-ADA': {'k_period': 170, 'k_smooth': 20, 'd_period': 25},   # 기존 (60,25,5)
+    'KRW-ANKR': {'k_period': 200, 'k_smooth': 60, 'd_period': 10},  # 기존 (70,25,5)
+    'KRW-AVAX': {'k_period': 150, 'k_smooth': 55, 'd_period': 15},  # 기존 (120,20,5)
     'KRW-AXS': {'k_period': 50, 'k_smooth': 20, 'd_period': 5},
-    'KRW-BCH': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
-    'KRW-BTC': {'k_period': 80, 'k_smooth': 25, 'd_period': 5},
-    'KRW-CRO': {'k_period': 120, 'k_smooth': 45, 'd_period': 5},
-    'KRW-DOGE': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
-    'KRW-ETH': {'k_period': 60, 'k_smooth': 20, 'd_period': 5},
-    'KRW-HBAR': {'k_period': 50, 'k_smooth': 35, 'd_period': 5},
-    'KRW-IMX': {'k_period': 50, 'k_smooth': 20, 'd_period': 5},
-    'KRW-MANA': {'k_period': 150, 'k_smooth': 35, 'd_period': 5},
-    'KRW-MVL': {'k_period': 50, 'k_smooth': 50, 'd_period': 5},
-    'KRW-SAND': {'k_period': 60, 'k_smooth': 20, 'd_period': 5},
-    'KRW-SOL': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
+    'KRW-BCH': {'k_period': 80, 'k_smooth': 30, 'd_period': 5},     # 기존 (50,30,5)
+    'KRW-BTC': {'k_period': 140, 'k_smooth': 30, 'd_period': 5},    # 기존 (80,25,5)
+    'KRW-CRO': {'k_period': 70, 'k_smooth': 45, 'd_period': 5},     # 기존 (120,45,5)
+    'KRW-DOGE': {'k_period': 190, 'k_smooth': 40, 'd_period': 5},   # 기존 (50,30,5)
+    'KRW-ETH': {'k_period': 60, 'k_smooth': 20, 'd_period': 5},     # 기존 (60,20,5) - 동일
+    'KRW-HBAR': {'k_period': 160, 'k_smooth': 35, 'd_period': 5},   # 기존 (50,35,5)
+    'KRW-IMX': {'k_period': 60, 'k_smooth': 20, 'd_period': 10},    # 기존 (50,20,5)
+    'KRW-MANA': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},    # 기존 (150,35,5)
+    'KRW-MVL': {'k_period': 50, 'k_smooth': 50, 'd_period': 5},     # 기존 (50,50,5) - 동일
+    'KRW-SAND': {'k_period': 120, 'k_smooth': 30, 'd_period': 5},   # 기존 (60,20,5)
+    'KRW-SOL': {'k_period': 160, 'k_smooth': 25, 'd_period': 10},   # 기존 (50,30,5)
     'KRW-THETA': {'k_period': 120, 'k_smooth': 30, 'd_period': 5},
-    'KRW-VET': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
+    'KRW-VET': {'k_period': 100, 'k_smooth': 45, 'd_period': 5},    # 기존 (50,30,5)
     'KRW-WAXP': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
-    'KRW-XLM': {'k_period': 50, 'k_smooth': 25, 'd_period': 5},
-    'KRW-XRP': {'k_period': 70, 'k_smooth': 20, 'd_period': 5},
+    'KRW-XLM': {'k_period': 50, 'k_smooth': 20, 'd_period': 10},    # 기존 (50,25,5)
+    'KRW-XRP': {'k_period': 50, 'k_smooth': 20, 'd_period': 5},     # 기존 (70,20,5)
 }
 
-# 역방향 전략 설정
+# 역방향 전략 설정 - 베이지안 최적화 결과 적용
+# hold_hours: 4H 캔들 수 (예: 84 = 84*4 = 336시간)
 REVERSE_ERROR_RATE_CONFIG = {
-    'KRW-ADA': {'error_rate': -38, 'hold_hours': 56},
-    'KRW-ANKR': {'error_rate': -51, 'hold_hours': 59},
-    'KRW-AVAX': {'error_rate': -48, 'hold_hours': 30},
+    'KRW-ADA': {'error_rate': -25, 'hold_hours': 84},    # 기존 (-38, 56) → 최적화
+    'KRW-ANKR': {'error_rate': -20, 'hold_hours': 44},   # 기존 (-51, 59)
+    'KRW-AVAX': {'error_rate': -15, 'hold_hours': 20},   # 기존 (-48, 30)
     'KRW-AXS': {'error_rate': -59, 'hold_hours': 48},
-    'KRW-BCH': {'error_rate': -45, 'hold_hours': 80},
-    'KRW-BTC': {'error_rate': -35, 'hold_hours': 24},
-    'KRW-CRO': {'error_rate': -44, 'hold_hours': 23},
-    'KRW-DOGE': {'error_rate': -28, 'hold_hours': 25},
-    'KRW-ETH': {'error_rate': -46, 'hold_hours': 80},
-    'KRW-HBAR': {'error_rate': -73, 'hold_hours': 47},
-    'KRW-IMX': {'error_rate': -25, 'hold_hours': 55},
-    'KRW-MANA': {'error_rate': -21, 'hold_hours': 34},
-    'KRW-MVL': {'error_rate': -47, 'hold_hours': 61},
-    'KRW-SAND': {'error_rate': -22, 'hold_hours': 66},
-    'KRW-SOL': {'error_rate': -57, 'hold_hours': 15},
+    'KRW-BCH': {'error_rate': -55, 'hold_hours': 12},    # 기존 (-45, 80)
+    'KRW-BTC': {'error_rate': -30, 'hold_hours': 40},    # 기존 (-35, 24)
+    'KRW-CRO': {'error_rate': -35, 'hold_hours': 48},    # 기존 (-44, 23)
+    'KRW-DOGE': {'error_rate': -20, 'hold_hours': 100},  # 기존 (-28, 25)
+    'KRW-ETH': {'error_rate': -45, 'hold_hours': 92},    # 기존 (-46, 80)
+    'KRW-HBAR': {'error_rate': -20, 'hold_hours': 60},   # 기존 (-73, 47)
+    'KRW-IMX': {'error_rate': -25, 'hold_hours': 12},    # 기존 (-25, 55)
+    'KRW-MANA': {'error_rate': -55, 'hold_hours': 16},   # 기존 (-21, 34)
+    'KRW-MVL': {'error_rate': -50, 'hold_hours': 76},    # 기존 (-47, 61)
+    'KRW-SAND': {'error_rate': -45, 'hold_hours': 84},   # 기존 (-22, 66)
+    'KRW-SOL': {'error_rate': -55, 'hold_hours': 16},    # 기존 (-57, 15)
     'KRW-THETA': {'error_rate': -25, 'hold_hours': 51},
-    'KRW-VET': {'error_rate': -55, 'hold_hours': 78},
+    'KRW-VET': {'error_rate': -15, 'hold_hours': 28},    # 기존 (-55, 78)
     'KRW-WAXP': {'error_rate': -39, 'hold_hours': 80},
-    'KRW-XLM': {'error_rate': -39, 'hold_hours': 16},
-    'KRW-XRP': {'error_rate': -43, 'hold_hours': 13},
+    'KRW-XLM': {'error_rate': -35, 'hold_hours': 80},    # 기존 (-39, 16)
+    'KRW-XRP': {'error_rate': -50, 'hold_hours': 48},    # 기존 (-43, 13)
 }
 
 # 매수 상태 추적을 위한 글로벌 변수
