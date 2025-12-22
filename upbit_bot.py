@@ -277,7 +277,7 @@ COINS = [
     'KRW-AKT', 'KRW-IMX', 'KRW-ARB', 'KRW-GRT', 'KRW-AVAX',
     'KRW-HBAR', 'KRW-NEAR', 'KRW-SOL', 'KRW-ADA', 'KRW-DOT',
     'KRW-DOGE', 'KRW-ETH', 'KRW-POL', 'KRW-LINK', 'KRW-XRP',
-    'KRW-BTC',
+    'KRW-BTC'
 ]
 
 # ============================================================
