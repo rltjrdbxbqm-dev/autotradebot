@@ -36,6 +36,9 @@ load_dotenv()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 TRADING_CONFIGS = [
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 메이저 코인 (BTC, ETH, SOL) - 각 21.6% 배분 (총 64.8%)
+    # ═══════════════════════════════════════════════════════════════════════════
     {
         'enabled': True,
         'symbol': 'BTCUSDT',
@@ -51,7 +54,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.1,
         'size_decimals': 4,
-        'allocation_pct': 33.3,
+        'allocation_pct': 23.3,
         'position_size_pct': 95,
         'description': 'BTC MA248 + Stoch(46,37,4) Lev 4x/Cash'
     },
@@ -70,7 +73,7 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.01,
         'size_decimals': 2,
-        'allocation_pct': 33.3,
+        'allocation_pct': 23.3,
         'position_size_pct': 95,
         'description': 'ETH MA152 + Stoch(58,23,18) Lev 4x/Cash'
     },
@@ -89,9 +92,127 @@ TRADING_CONFIGS = [
         'leverage_down': 0,
         'tick_size': 0.001,
         'size_decimals': 1,
-        'allocation_pct': 33.3,
+        'allocation_pct': 23.3,
         'position_size_pct': 95,
         'description': 'SOL MA64 + Stoch(51,20,16) Lev 2x/Cash'
+    },
+    # ═══════════════════════════════════════════════════════════════════════════
+    # 고성과 알트코인 - 각 5% 배분 (총 30%)
+    # 백테스트 기반 최적 파라미터 적용
+    # ═══════════════════════════════════════════════════════════════════════════
+    {
+        'enabled': True,
+        'symbol': 'MOODENGUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 120,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 130,
+        'stoch_k_smooth': 20,
+        'stoch_d_period': 30,
+        'leverage_up': 4,
+        'leverage_down': 0,
+        'tick_size': 0.00001,
+        'size_decimals': 0,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'MOODENG MA120 + Stoch(130,20,30) Lev 4x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'PENGUUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 260,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 60,
+        'stoch_k_smooth': 15,
+        'stoch_d_period': 15,
+        'leverage_up': 5,
+        'leverage_down': 0,
+        'tick_size': 0.00001,
+        'size_decimals': 0,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'PENGU MA260 + Stoch(60,15,15) Lev 5x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'DRIFTUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 50,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 175,
+        'stoch_k_smooth': 60,
+        'stoch_d_period': 5,
+        'leverage_up': 5,
+        'leverage_down': 0,
+        'tick_size': 0.0001,
+        'size_decimals': 1,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'DRIFT MA50 + Stoch(175,60,5) Lev 5x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'VIRTUALUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 80,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 75,
+        'stoch_k_smooth': 20,
+        'stoch_d_period': 30,
+        'leverage_up': 3,
+        'leverage_down': 0,
+        'tick_size': 0.0001,
+        'size_decimals': 1,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'VIRTUAL MA80 + Stoch(75,20,30) Lev 3x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'AEROUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 90,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 130,
+        'stoch_k_smooth': 35,
+        'stoch_d_period': 25,
+        'leverage_up': 4,
+        'leverage_down': 0,
+        'tick_size': 0.0001,
+        'size_decimals': 1,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'AERO MA90 + Stoch(130,35,25) Lev 4x/Cash'
+    },
+    {
+        'enabled': True,
+        'symbol': 'SUIUSDT',
+        'product_type': 'USDT-FUTURES',
+        'margin_coin': 'USDT',
+        'ma_period': 140,
+        'ma_type': 'SMA',
+        'timeframe': '4H',
+        'stoch_k_period': 90,
+        'stoch_k_smooth': 40,
+        'stoch_d_period': 5,
+        'leverage_up': 3,
+        'leverage_down': 0,
+        'tick_size': 0.0001,
+        'size_decimals': 1,
+        'allocation_pct': 5.0,
+        'position_size_pct': 95,
+        'description': 'SUI MA140 + Stoch(90,40,5) Lev 3x/Cash'
     },
 ]
 
