@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.3 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.5 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -8,6 +8,8 @@ Bitget Futures 자동매매 봇 v3.3 (Binance 신호 + Bitget 매매) + 텔레�
 - 텔레그램 실시간 알림
 - [v3.2] 자금 배분 로직 개선: 가용 잔고 기반 동적 계산
 - [v3.3] 종료 시 텔레그램 알림 (kill, Ctrl+C 등)
+- [v3.4] allocation_pct 정상 반영: 코인별 비율 배분 (BTC/ETH/SOL 30%, SUI 10%)
+- [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작 시점(09:00 KST) 캐싱
 ================================================================================
 """
 
@@ -37,7 +39,7 @@ load_dotenv()
 
 TRADING_CONFIGS = [
     # ═══════════════════════════════════════════════════════════════════════════
-    # 메이저 코인 (BTC, ETH, SOL) - 각 21.6% 배분 (총 64.8%)
+    # 메이저 코인 (BTC, ETH, SOL) - 각 30% 배분 (총 90%)
     # ═══════════════════════════════════════════════════════════════════════════
     {
         'enabled': True,
@@ -55,7 +57,7 @@ TRADING_CONFIGS = [
         'tick_size': 0.1,
         'size_decimals': 4,
         'allocation_pct': 30.0,
-        'position_size_pct': 95,
+        'position_size_pct': 99,
         'description': 'BTC MA248 + Stoch(46,37,4) Lev 4x/Cash'
     },
     {
@@ -74,7 +76,7 @@ TRADING_CONFIGS = [
         'tick_size': 0.01,
         'size_decimals': 2,
         'allocation_pct': 30.0,
-        'position_size_pct': 95,
+        'position_size_pct': 99,
         'description': 'ETH MA152 + Stoch(58,23,18) Lev 4x/Cash'
     },
     {
@@ -93,12 +95,11 @@ TRADING_CONFIGS = [
         'tick_size': 0.001,
         'size_decimals': 1,
         'allocation_pct': 30.0,
-        'position_size_pct': 95,
+        'position_size_pct': 99,
         'description': 'SOL MA64 + Stoch(51,20,16) Lev 2x/Cash'
     },
     # ═══════════════════════════════════════════════════════════════════════════
-    # 고성과 알트코인 - 각 5% 배분 (총 30%)
-    # 백테스트 기반 최적 파라미터 적용
+    # 알트코인 - SUI 10% 배분
     # ═══════════════════════════════════════════════════════════════════════════
     {
         'enabled': True,
@@ -116,7 +117,7 @@ TRADING_CONFIGS = [
         'tick_size': 0.0001,
         'size_decimals': 1,
         'allocation_pct': 10.0,
-        'position_size_pct': 95,
+        'position_size_pct': 99,
         'description': 'SUI MA140 + Stoch(90,40,5) Lev 3x/Cash'
     },
 ]
@@ -285,7 +286,7 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>Bitget 선물봇 시작</b>\n"
+    msg = f"🚀 <b>Bitget 선물봇 시작 v3.5</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📡 신호: Binance API\n"
     msg += f"💹 매매: Bitget API\n"
@@ -295,7 +296,8 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     
     for c in configs:
         e_desc = "현금" if c['leverage_down'] == 0 else f"{c['leverage_down']}x"
-        msg += f"• {c['symbol']}: {c['leverage_up']}x/{e_desc}\n"
+        alloc = c.get('allocation_pct', 0)
+        msg += f"• {c['symbol']}: {alloc:.0f}% / {c['leverage_up']}x/{e_desc}\n"
     
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"🕐 {now}"
@@ -731,13 +733,15 @@ class BitgetClient:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 📊 [v3.2 개선] 포트폴리오 매니저 - 가용 잔고 기반 동적 계산
+# 📊 [v3.4 개선] 포트폴리오 매니저 - allocation_pct 비율 배분 적용
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class PortfolioManager:
     def __init__(self, client: BitgetClient, configs: List[Dict]):
         self.client = client
         self.configs = [c for c in configs if c['enabled']]
+        # config를 symbol로 빠르게 찾기 위한 딕셔너리
+        self.config_by_symbol = {c['symbol']: c for c in self.configs}
     
     def get_account_info(self) -> Dict:
         """계좌 정보 조회 (총 자산, 가용 잔고, 마진 등)"""
@@ -763,26 +767,9 @@ class PortfolioManager:
         """가용 잔고 조회"""
         return self.get_account_info()['available']
     
-    def count_empty_slots(self) -> int:
-        """
-        [v3.2] 포지션이 없는 빈 슬롯 수 계산
-        """
-        empty_count = 0
-        for cfg in self.configs:
-            pos_data = self.client.get_position(cfg['symbol'], cfg['product_type'], cfg['margin_coin'])
-            has_position = False
-            if pos_data:
-                for p in pos_data:
-                    if float(p.get('total', 0)) > 0:
-                        has_position = True
-                        break
-            if not has_position:
-                empty_count += 1
-        return empty_count
-    
     def get_position_status(self) -> Dict[str, bool]:
         """
-        [v3.2] 각 심볼별 포지션 보유 여부 확인
+        각 심볼별 포지션 보유 여부 확인
         Returns: {'BTCUSDT': True, 'ETHUSDT': False, ...}
         """
         status = {}
@@ -797,35 +784,76 @@ class PortfolioManager:
             status[cfg['symbol']] = has_position
         return status
     
-    def calculate_invest_amount(self) -> float:
+    def count_empty_slots(self) -> int:
+        """포지션이 없는 빈 슬롯 수 계산"""
+        status = self.get_position_status()
+        return sum(1 for has_pos in status.values() if not has_pos)
+    
+    def calculate_invest_amount_for_symbol(self, symbol: str) -> float:
         """
-        [v3.2 핵심 개선] 가용 잔고 기반 투자금액 계산
-        - 실제 가용 잔고(crossedMaxAvailable)를 기준으로 계산
-        - 빈 슬롯 수로 나누어 균등 배분
-        - 수수료 여유분 고려
+        [v3.4 핵심 개선] allocation_pct를 반영한 개별 코인 투자금액 계산
+        
+        로직:
+        1. 가용 잔고 확인
+        2. 빈 슬롯(포지션 없는 코인)들의 allocation_pct 합계 계산
+        3. 해당 심볼의 allocation_pct 비율로 가용 잔고 배분
+        
+        예시: 가용 잔고 $1000, BTC(30%)/ETH(30%) 빈 슬롯
+        - 빈 슬롯 합계: 60%
+        - BTC 배분: $1000 * (30% / 60%) = $500
+        - ETH 배분: $1000 * (30% / 60%) = $500
         """
         available = self.get_available_balance()
-        empty_slots = self.count_empty_slots()
+        if available <= 0:
+            logger.warning(f"[{symbol}] 가용 잔고가 0입니다")
+            return 0
         
-        if empty_slots == 0:
-            logger.info("📊 모든 슬롯에 포지션 보유 중 - 신규 진입 불가")
+        # 해당 심볼의 config 찾기
+        target_config = self.config_by_symbol.get(symbol)
+        if not target_config:
+            logger.error(f"[{symbol}] config를 찾을 수 없습니다")
+            return 0
+        
+        target_allocation = target_config.get('allocation_pct', 0)
+        if target_allocation <= 0:
+            logger.warning(f"[{symbol}] allocation_pct가 0입니다")
+            return 0
+        
+        # 포지션 상태 확인
+        position_status = self.get_position_status()
+        
+        # 빈 슬롯들의 allocation_pct 합계 계산
+        empty_allocation_sum = 0
+        for cfg in self.configs:
+            if not position_status.get(cfg['symbol'], False):  # 빈 슬롯
+                empty_allocation_sum += cfg.get('allocation_pct', 0)
+        
+        if empty_allocation_sum <= 0:
+            logger.info(f"[{symbol}] 모든 슬롯에 포지션 보유 중")
+            return 0
+        
+        # 해당 심볼이 빈 슬롯인지 확인
+        if position_status.get(symbol, False):
+            logger.info(f"[{symbol}] 이미 포지션 보유 중")
             return 0
         
         # 수수료 0.5% 고려하여 99.5%만 사용
         usable_balance = available * 0.995
-        invest_amount = usable_balance / empty_slots
         
-        logger.info(f"💰 자금 배분: 가용 ${available:,.2f} / 빈슬롯 {empty_slots}개 = 코인당 ${invest_amount:,.2f}")
+        # allocation_pct 비율에 따라 배분
+        invest_amount = usable_balance * (target_allocation / empty_allocation_sum)
+        
+        logger.info(f"[{symbol}] 💰 자금 배분 (v3.4): 가용 ${available:,.2f} × "
+                   f"({target_allocation:.0f}% / {empty_allocation_sum:.0f}%) = ${invest_amount:,.2f}")
         
         return invest_amount
     
     def get_allocated_capital(self, config: Dict) -> float:
         """
-        [v3.2 개선] 개별 코인 배분 자본 계산
-        - 기존: 총 자산 * allocation_pct
-        - 개선: 가용 잔고 기반 동적 계산
+        [v3.4 개선] 개별 코인 배분 자본 계산
+        - allocation_pct 비율에 따라 배분
         """
-        return self.calculate_invest_amount()
+        return self.calculate_invest_amount_for_symbol(config['symbol'])
     
     def get_all_positions(self) -> List[Dict]:
         """모든 활성 포지션 조회"""
@@ -853,21 +881,40 @@ class PortfolioManager:
         margin = acc_info['margin']
         pnl = acc_info['pnl']
         
-        empty_slots = self.count_empty_slots()
+        position_status = self.get_position_status()
+        empty_count = sum(1 for has_pos in position_status.values() if not has_pos)
         total_slots = len(self.configs)
         
         logger.info(f"\n{'='*70}")
-        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.3]")
+        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.5 - allocation_pct + 스토캐스틱 캐싱]")
         logger.info(f"{'='*70}")
         logger.info(f"   총 자산: {equity:,.2f} USDT")
         logger.info(f"   가용 잔고: {available:,.2f} USDT")
         logger.info(f"   사용 마진: {margin:,.2f} USDT")
         logger.info(f"   미실현 손익: {pnl:+,.2f} USDT")
-        logger.info(f"   슬롯 현황: {total_slots - empty_slots}/{total_slots} 사용 중")
+        logger.info(f"   슬롯 현황: {total_slots - empty_count}/{total_slots} 사용 중")
         
-        if empty_slots > 0:
-            invest_per_slot = (available * 0.995) / empty_slots
-            logger.info(f"   신규 진입 시 코인당: {invest_per_slot:,.2f} USDT")
+        if empty_count > 0:
+            # 빈 슬롯들의 allocation 합계 계산
+            empty_allocation_sum = 0
+            empty_symbols = []
+            for cfg in self.configs:
+                if not position_status.get(cfg['symbol'], False):
+                    empty_allocation_sum += cfg.get('allocation_pct', 0)
+                    empty_symbols.append(f"{cfg['symbol']}({cfg.get('allocation_pct', 0):.0f}%)")
+            
+            logger.info(f"   빈 슬롯: {', '.join(empty_symbols)}")
+            logger.info(f"   빈 슬롯 배분 합계: {empty_allocation_sum:.0f}%")
+            
+            usable = available * 0.995
+            logger.info(f"   신규 진입 가능 금액: {usable:,.2f} USDT")
+            
+            # 각 빈 슬롯별 예상 배분 금액
+            for cfg in self.configs:
+                if not position_status.get(cfg['symbol'], False):
+                    alloc_pct = cfg.get('allocation_pct', 0)
+                    expected = usable * (alloc_pct / empty_allocation_sum) if empty_allocation_sum > 0 else 0
+                    logger.info(f"     → {cfg['symbol']}: ${expected:,.2f} ({alloc_pct:.0f}%/{empty_allocation_sum:.0f}%)")
         
         logger.info(f"{'='*70}\n")
         
@@ -901,7 +948,18 @@ class TradingBot:
         self.tick_size = config.get('tick_size', 0.1)
         self.size_decimals = config.get('size_decimals', 3)
         self.position_size_pct = config['position_size_pct']
+        self.allocation_pct = config.get('allocation_pct', 25.0)
         self.description = config.get('description', self.symbol)
+        
+        # ═══════════════════════════════════════════════════════════════════════
+        # [v3.5] 스토캐스틱 캐시 - 일봉 시작 시점(UTC 00:00 = KST 09:00) 기준
+        # ═══════════════════════════════════════════════════════════════════════
+        self._stoch_cache = {
+            'utc_date': None,      # 캐시된 UTC 날짜 (YYYY-MM-DD)
+            'is_bull': False,      # K > D 여부
+            'k': 0.0,              # K 값
+            'd': 0.0               # D 값
+        }
     
     def round_price(self, price: float) -> float:
         return round(price / self.tick_size) * self.tick_size
@@ -961,20 +1019,20 @@ class TradingBot:
         return 'timeout', 0
     
     # ═══════════════════════════════════════════════════════════════════════════
-    # [v3.2 개선] 포지션 크기 계산 - 가용 잔고 기반
+    # [v3.4 개선] 포지션 크기 계산 - allocation_pct 비율 반영
     # ═══════════════════════════════════════════════════════════════════════════
     
     def calculate_position_size(self, price: float, leverage: int) -> str:
         """
-        [v3.2 개선] 가용 잔고 기반 포지션 크기 계산
-        - 진입 직전에 가용 잔고를 확인하여 계산
-        - 빈 슬롯 수 기준으로 균등 배분
+        [v3.4 개선] allocation_pct를 반영한 포지션 크기 계산
+        - 각 코인별 설정된 비율에 따라 자금 배분
+        - BTC/ETH/SOL: 30%, SUI: 10%
         """
         if leverage <= 0:
             return "0"
         
-        # [v3.2] 진입 직전 가용 잔고 기반 투자금액 계산
-        allocated = self.portfolio.calculate_invest_amount()
+        # [v3.4] allocation_pct 반영한 투자금액 계산
+        allocated = self.portfolio.calculate_invest_amount_for_symbol(self.symbol)
         
         if allocated <= 0:
             logger.warning(f"[{self.symbol}] 배분 가능한 자금이 없습니다")
@@ -987,14 +1045,15 @@ class TradingBot:
             logger.warning(f"[{self.symbol}] 주문 금액이 최소 5 USDT 미만: {use:.2f}")
             return "0"
         
-        min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1}
+        min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1, 'SUIUSDT': 0.1}
         min_size = min_sizes.get(self.symbol, 0.001)
         
         # 레버리지 적용하여 수량 계산
         size = (use * leverage) / price
         size = max(min_size, round(size, self.size_decimals))
         
-        logger.info(f"[{self.symbol}] 💵 배분: {allocated:.2f}, 사용: {use:.2f}, Lev {leverage}x → 수량: {size}")
+        logger.info(f"[{self.symbol}] 💵 배분({self.allocation_pct:.0f}%): ${allocated:.2f}, "
+                   f"사용: ${use:.2f}, Lev {leverage}x → 수량: {size}")
         return self.format_size(size)
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1017,7 +1076,7 @@ class TradingBot:
         if price <= 0:
             return False
         
-        # [v3.2] 진입 직전에 포지션 크기 계산 (가용 잔고 기반)
+        # [v3.4] allocation_pct 반영한 포지션 크기 계산
         target_size = self.calculate_position_size(price, leverage)
         if target_size == "0":
             logger.error(f"[{self.symbol}] 포지션 크기 계산 실패 또는 자금 부족")
@@ -1088,7 +1147,7 @@ class TradingBot:
             time.sleep(RETRY_DELAY_SECONDS)
         
         if remaining_size > 0:
-            min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1}
+            min_sizes = {'BTCUSDT': 0.001, 'ETHUSDT': 0.01, 'SOLUSDT': 0.1, 'SUIUSDT': 0.1}
             min_size = min_sizes.get(self.symbol, 0.001)
             
             if remaining_size >= min_size:
@@ -1246,21 +1305,69 @@ class TradingBot:
         return slow_k, slow_d
     
     def get_stochastic_signal(self) -> tuple:
+        """
+        [v3.5] 스토캐스틱 신호 (UTC 날짜 기준 캐싱)
+        
+        - iloc[-1] 사용: 현재 진행 중인 일봉의 스토캐스틱 값
+        - UTC 날짜 기준 캐싱: 같은 UTC 날짜 내에서는 캐시된 값 사용
+        - UTC 00:00 = 한국시간 09:00
+        
+        동작:
+        - 09:00 KST에 처음 호출 시 → 현재 데이터로 계산 후 캐싱
+        - 이후 다음날 09:00 KST까지 → 캐시된 값 사용 (API 호출 없음)
+        - 다음날 09:00 KST 이후 → 새로 계산 후 캐시 갱신
+        """
+        # 현재 UTC 날짜 확인
+        now_utc = datetime.now(timezone.utc)
+        current_utc_date = now_utc.strftime('%Y-%m-%d')
+        
+        # 캐시 확인: 같은 UTC 날짜면 캐시된 값 반환
+        if self._stoch_cache['utc_date'] == current_utc_date:
+            logger.debug(f"[{self.symbol}] 📦 스토캐스틱 캐시 사용 (UTC {current_utc_date})")
+            return (
+                self._stoch_cache['is_bull'],
+                self._stoch_cache['k'],
+                self._stoch_cache['d']
+            )
+        
+        # 새로운 UTC 날짜 → 현재 데이터로 계산
         required = self.stoch_k_period + self.stoch_k_smooth + self.stoch_d_period + 50
         df = self.signal_client.get_candles_pagination(self.symbol, '1D', required)
+        
         if df.empty:
             logger.warning(f"[{self.symbol}] Binance 1D 캔들 조회 실패")
             return False, 0, 0
+        
         slow_k, slow_d = self.calculate_stochastic(df)
         valid_k = slow_k.dropna()
         valid_d = slow_d.dropna()
-        if len(valid_k) < 2 or len(valid_d) < 2:
+        
+        if len(valid_k) < 1 or len(valid_d) < 1:
+            logger.warning(f"[{self.symbol}] 스토캐스틱 데이터 부족")
             return False, 0, 0
-        k = valid_k.iloc[-2]
-        d = valid_d.iloc[-2]
+        
+        # [v3.5] iloc[-1] 사용: 현재 일봉의 스토캐스틱 값
+        k = valid_k.iloc[-1]
+        d = valid_d.iloc[-1]
+        
         if pd.isna(k) or pd.isna(d):
             return False, 0, 0
-        return k > d, k, d
+        
+        is_bull = k > d
+        
+        # 캐시 업데이트: 이 값이 다음날 09:00 KST까지 유지됨
+        self._stoch_cache = {
+            'utc_date': current_utc_date,
+            'is_bull': is_bull,
+            'k': float(k),
+            'd': float(d)
+        }
+        
+        kst_time = (now_utc + timedelta(hours=9)).strftime('%Y-%m-%d %H:%M')
+        logger.info(f"[{self.symbol}] 📊 스토캐스틱 캐시 갱신 (UTC {current_utc_date}, KST {kst_time})")
+        logger.info(f"[{self.symbol}]    K={k:.2f}, D={d:.2f} → {'상승장' if is_bull else '하락장'}")
+        
+        return is_bull, float(k), float(d)
     
     def get_target_leverage(self) -> int:
         is_bullish, k, d = self.get_stochastic_signal()
@@ -1321,6 +1428,7 @@ class TradingBot:
     def show_status(self):
         logger.info(f"\n{'='*60}")
         logger.info(f"📊 [{self.symbol}] 현재 상태 (신호: Binance, 매매: Bitget)")
+        logger.info(f"   배분 비율: {self.allocation_pct:.0f}%")
         logger.info(f"{'='*60}")
         
         binance_ticker = self.signal_client.get_ticker(self.symbol)
@@ -1341,7 +1449,10 @@ class TradingBot:
         is_bull, k, d = self.get_stochastic_signal()
         e_desc = f"{self.leverage_down}x" if self.leverage_down > 0 else "현금"
         stoch_sig = f"🟢 상승장→{self.leverage_up}x" if is_bull else f"🔴 하락장→{e_desc}"
-        logger.info(f"📉 Stoch (Binance): K={k:.2f}, D={d:.2f} → {stoch_sig}")
+        
+        # 캐시 상태 표시
+        cache_date = self._stoch_cache.get('utc_date', 'N/A')
+        logger.info(f"📉 Stoch (Binance): K={k:.2f}, D={d:.2f} → {stoch_sig} [캐시: UTC {cache_date}]")
         
         pos = self.get_current_position()
         if pos['side'] == 'long' and pos['size'] > 0:
@@ -1352,7 +1463,7 @@ class TradingBot:
     
     def execute(self):
         logger.info(f"\n{'─'*60}")
-        logger.info(f"[{self.symbol}] {self.description}")
+        logger.info(f"[{self.symbol}] {self.description} (배분: {self.allocation_pct:.0f}%)")
         logger.info(f"{'─'*60}")
         action, target_lev = self.get_final_action()
         pos = self.get_current_position()
@@ -1415,21 +1526,25 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.3 (Binance 신호 + Bitget 매매) + 텔레그램")
-    print("   [v3.2] 자금 배분 개선: 가용 잔고 기반 동적 계산")
-    print("   [v3.3] 종료 핸들러 추가: kill, Ctrl+C 시 텔레그램 알림")
+    print("📊 Bitget 자동매매 봇 v3.5 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("   [v3.4] allocation_pct 정상 반영: 코인별 비율 배분")
+    print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
     print(f"💹 매매 실행: Bitget Futures API")
     print(f"📲 알림: 텔레그램")
     print(f"📋 지정가 최대 재시도: {MAX_LIMIT_RETRY}회 (초과 시 시장가)")
-    print(f"\n📈 전략:")
+    print(f"\n📈 전략 (allocation_pct 적용):")
+    total_alloc = 0
     for c in TRADING_CONFIGS:
         if c['enabled']:
             stoch = f"({c['stoch_k_period']},{c['stoch_k_smooth']},{c['stoch_d_period']})"
             e = "현금" if c['leverage_down'] == 0 else f"{c['leverage_down']}x"
-            print(f"   {c['symbol']}: MA{c['ma_period']} + Stoch{stoch}, Lev {c['leverage_up']}x/{e}")
+            alloc = c.get('allocation_pct', 0)
+            total_alloc += alloc
+            print(f"   {c['symbol']}: {alloc:.0f}% | MA{c['ma_period']} + Stoch{stoch}, Lev {c['leverage_up']}x/{e}")
+    print(f"\n   총 배분: {total_alloc:.0f}%")
     print("="*70)
 
 
