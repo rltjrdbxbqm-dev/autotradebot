@@ -1,16 +1,15 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.2.3 (스토캐스틱 캐시 타이밍 수정판)
+업비트 자동매매 봇 v2.2.4 (현재가 기준 매매 조건 수정)
 ================================================================================
 수정 내역:
-1. [Critical Fix] 스토캐스틱 캐시 갱신 시간 수정 (09:05 → 09:00)
-   - 기존: 09:05 이후에만 새 일봉 데이터로 스토캐스틱 갱신
-   - 변경: 09:00부터 새 일봉 데이터로 스토캐스틱 갱신
-   - 효과: 09:00 매매가 최신 스토캐스틱 값으로 정상 실행됨
-2. [Previous] 4시간봉 이동평균선(MA) 계산 함수 교체
-   - pyupbit.get_ohlcv 사용 (200개 초과 시 자동 분할 요청)
-3. 베이지안 최적화 파라미터 유지
-4. 스토캐스틱 N/A 문제 해결 코드 유지
+1. [Critical Fix] 매매 조건을 시가 기준에서 현재가 기준으로 변경
+   - 상승 전략: 4H 시가 > MA → 현재가 > MA
+   - 역방향 전략: 4H 시가 < MA → 현재가 < MA
+   - 오차율 계산: 시가 기준 → 현재가 기준
+2. [Previous] 스토캐스틱 캐시 갱신 시간 수정 (09:05 → 09:00)
+3. [Previous] 4시간봉 이동평균선(MA) 계산 함수 교체
+4. 베이지안 최적화 파라미터 유지
 ================================================================================
 """
 
@@ -175,10 +174,10 @@ def send_start_alert(status_loaded=False):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.3)</b>\n"
+    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.4)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 전략: MA + 스토캐스틱 + 역방향\n"
-    msg += f"🛠️ 수정: 스토캐스틱 캐시 타이밍 (09:00)\n"
+    msg += f"🛠️ 수정: 현재가 기준 매매 조건\n"
     msg += f"🪙 대상: {len(COINS)}개 코인\n"
     if status_loaded:
         msg += f"📂 이전 상태: 복원됨\n"
@@ -844,7 +843,7 @@ def calculate_error_rate(price, ma_price):
     return ((price - ma_price) / ma_price) * 100
 
 
-def check_reverse_strategy(ticker, opening_price_4h, ma_price):
+def check_reverse_strategy(ticker, current_price, ma_price):
     """역방향 전략 체크"""
     global buy_status
     
@@ -856,7 +855,7 @@ def check_reverse_strategy(ticker, opening_price_4h, ma_price):
     hold_duration_hours = config['hold_hours'] * 4
     
     current_time = datetime.now()
-    error_rate = calculate_error_rate(opening_price_4h, ma_price)
+    error_rate = calculate_error_rate(current_price, ma_price)
     
     if buy_status[ticker]['is_reverse_holding']:
         start_time = buy_status[ticker]['reverse_start_time']
@@ -876,7 +875,7 @@ def check_reverse_strategy(ticker, opening_price_4h, ma_price):
                 logging.info(f"⏳ {ticker} 역방향 보유 중 - 남은시간: {remaining:.1f}시간")
                 return True, True, error_rate
     
-    if opening_price_4h < ma_price and error_rate <= error_rate_threshold:
+    if current_price < ma_price and error_rate <= error_rate_threshold:
         buy_status[ticker]['is_reverse_holding'] = True
         buy_status[ticker]['reverse_start_time'] = current_time
         buy_status[ticker]['reverse_hold_hours'] = hold_duration_hours
@@ -933,10 +932,10 @@ def trade_strategy():
             current_balance = upbit.get_balance(coin_currency)
             
             reverse_signal, is_reverse_holding, error_rate = check_reverse_strategy(
-                ticker, opening_price_4h, ma_price
+                ticker, current_price, ma_price
             )
             
-            ma_condition = opening_price_4h > ma_price
+            ma_condition = current_price > ma_price
             
             if stoch_data and stoch_data.get('signal') is not None:
                 stoch_condition = stoch_data['signal']
@@ -960,7 +959,7 @@ def trade_strategy():
             stoch_str = f"K:{slow_k:.1f}/D:{slow_d:.1f}" if slow_k is not None else "N/A"
             reverse_str = "보유중" if is_reverse_holding else ("신호" if reverse_signal else "X")
             
-            logging.info(f"{ticker} | 시가:{opening_price_4h:,.0f} | MA:{ma_price:,.0f} | "
+            logging.info(f"{ticker} | 현재가:{current_price:,.0f} | MA:{ma_price:,.0f} | "
                         f"오차율:{error_rate:.1f}% | 스토캐스틱:{stoch_str} | "
                         f"MA:{ma_condition} | Stoch:{stoch_condition} | 역방향:{reverse_str} | "
                         f"최종:{final_buy_condition} ({strategy_type})")
@@ -1074,20 +1073,20 @@ def send_daily_report():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 업비트 자동매매 봇 v2.2.3 (스토캐스틱 캐시 타이밍 수정)")
+    logging.info("🤖 업비트 자동매매 봇 v2.2.4 (현재가 기준 매매 조건)")
     logging.info("=" * 80)
     logging.info("📦 개선 사항:")
-    logging.info("   1. [FIX] 스토캐스틱 캐시 갱신 시간 수정 (09:05 → 09:00)")
+    logging.info("   1. [FIX] 매매 조건을 시가 → 현재가 기준으로 변경")
     logging.info("   2. [FIX] 4시간봉 MA 계산 오류 수정 (200개 데이터 제한 해결)")
     logging.info("   3. 베이지안 최적화 파라미터 적용 (MA, Stoch, Reverse)")
     logging.info("   4. JSON 저장 오류 해결 (NumPy 타입 형변환)")
     logging.info("-" * 80)
     logging.info("📈 상승 전략:")
-    logging.info("   - 조건1: 4H 시가 > MA (4H봉 기준)")
+    logging.info("   - 조건1: 현재가 > MA (4H봉 기준)")
     logging.info("   - 조건2: Slow %K > Slow %D (1D봉 기준)")
     logging.info("-" * 80)
     logging.info("📉 역방향 전략:")
-    logging.info("   - 조건: 4H 시가 < MA AND 오차율 <= 임계값")
+    logging.info("   - 조건: 현재가 < MA AND 오차율 <= 임계값")
     logging.info("   - 조건 충족 시 지정된 시간 동안 무조건 보유")
     logging.info("-" * 80)
     
