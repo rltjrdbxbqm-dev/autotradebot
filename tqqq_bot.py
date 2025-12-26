@@ -31,7 +31,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # 알림 시간 설정 (한국 시간 기준)
-ALERT_TIMES = ['06:00']  # 매일 아침 6시
+ALERT_TIME = '06:00'  # 화~토 아침 6시 (미국 월~금 장 마감 후)
 
 # 로깅 설정
 logging.basicConfig(
@@ -283,10 +283,13 @@ def main():
     logger.info("시작 시 즉시 알림 전송...")
     send_tqqq_alert()
     
-    # 스케줄 설정
-    for alert_time in ALERT_TIMES:
-        schedule.every().day.at(alert_time).do(send_tqqq_alert)
-        logger.info(f"스케줄 등록: 매일 {alert_time}")
+    # 스케줄 설정 (화~토 06:00 = 미국 월~금 장 마감 후)
+    schedule.every().tuesday.at(ALERT_TIME).do(send_tqqq_alert)
+    schedule.every().wednesday.at(ALERT_TIME).do(send_tqqq_alert)
+    schedule.every().thursday.at(ALERT_TIME).do(send_tqqq_alert)
+    schedule.every().friday.at(ALERT_TIME).do(send_tqqq_alert)
+    schedule.every().saturday.at(ALERT_TIME).do(send_tqqq_alert)
+    logger.info(f"스케줄 등록: 화~토 {ALERT_TIME}")
     
     logger.info("스케줄러 시작. Ctrl+C로 종료.")
     
