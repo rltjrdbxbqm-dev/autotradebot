@@ -77,11 +77,12 @@ def send_telegram(message: str) -> bool:
 
 class TQQQAnalyzer:
     def __init__(self):
-        self.stoch_config = {'period': 166, 'k_period': 57, 'd_period': 19}
-        self.ma_periods = [20, 45, 151, 212]
+        # 나스닥100 기반 베이지안 최적화 결과 (CAGR 31.4%, Sharpe 0.86)
+        self.stoch_config = {'period': 112, 'k_period': 78, 'd_period': 38}
+        self.ma_periods = [19, 49, 192, 266]
 
-    def get_data(self, days_back=400):
-        """TQQQ 데이터 가져오기"""
+    def get_data(self, days_back=600):
+        """TQQQ 데이터 가져오기 (MA266 + Stoch 계산에 충분한 기간)"""
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
         try:
@@ -130,7 +131,7 @@ class TQQQAnalyzer:
         if is_bullish:
             tqqq_ratio = sum(ma_signals.values()) * 0.25
         else:
-            tqqq_ratio = (int(ma_signals[20]) + int(ma_signals[45])) * 0.5
+            tqqq_ratio = (int(ma_signals[19]) + int(ma_signals[49])) * 0.5
         
         cash_ratio = 1 - tqqq_ratio
         
@@ -140,7 +141,7 @@ class TQQQAnalyzer:
         if prev_bullish:
             prev_tqqq = sum(prev_ma.values()) * 0.25
         else:
-            prev_tqqq = (int(prev_ma[20]) + int(prev_ma[45])) * 0.5
+            prev_tqqq = (int(prev_ma[19]) + int(prev_ma[49])) * 0.5
         
         change = tqqq_ratio - prev_tqqq
         
@@ -212,10 +213,10 @@ def create_alert_message(result: dict) -> str:
     regime_text = 'BULLISH (K > D)' if r['is_bullish'] else 'BEARISH (K < D)'
     
     # MA 시그널
-    ma20 = '✅' if r['ma_signals'][20] else '❌'
-    ma45 = '✅' if r['ma_signals'][45] else '❌'
-    ma151 = '✅' if r['ma_signals'][151] else '❌'
-    ma212 = '✅' if r['ma_signals'][212] else '❌'
+    ma19 = '✅' if r['ma_signals'][19] else '❌'
+    ma49 = '✅' if r['ma_signals'][49] else '❌'
+    ma192 = '✅' if r['ma_signals'][192] else '❌'
+    ma266 = '✅' if r['ma_signals'][266] else '❌'
     
     # 메시지 생성
     msg = f"""⚡ TQQQ SNIPER
@@ -239,8 +240,8 @@ def create_alert_message(result: dict) -> str:
    K: {r['stoch_k']:.1f} / D: {r['stoch_d']:.1f}
 
 📡 MA 시그널
-   MA20: {ma20} | MA45: {ma45}
-   MA151: {ma151} | MA212: {ma212}
+   MA19: {ma19} | MA49: {ma49}
+   MA192: {ma192} | MA266: {ma266}
 ━━━━━━━━━━━━━━━
 """
     return msg
