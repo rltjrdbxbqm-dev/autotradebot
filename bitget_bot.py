@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.5 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.6 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -10,6 +10,7 @@ Bitget Futures 자동매매 봇 v3.5 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.3] 종료 시 텔레그램 알림 (kill, Ctrl+C 등)
 - [v3.4] allocation_pct 정상 반영: 코인별 비율 배분 (BTC/ETH/SOL 30%, SUI 10%)
 - [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작 시점(09:00 KST) 캐싱
+- [v3.6] 진입 자산 규모 제한: 기존 방식 vs 총자산×allocation_pct 중 작은 값 사용
 ================================================================================
 """
 
@@ -886,7 +887,7 @@ class PortfolioManager:
         total_slots = len(self.configs)
         
         logger.info(f"\n{'='*70}")
-        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.5 - allocation_pct + 스토캐스틱 캐싱]")
+        logger.info(f"💰 포트폴리오 현황 (Bitget) [v3.6 - 진입자산 상한선 적용]")
         logger.info(f"{'='*70}")
         logger.info(f"   총 자산: {equity:,.2f} USDT")
         logger.info(f"   가용 잔고: {available:,.2f} USDT")
@@ -1024,21 +1025,32 @@ class TradingBot:
     
     def calculate_position_size(self, price: float, leverage: int) -> str:
         """
-        [v3.4 개선] allocation_pct를 반영한 포지션 크기 계산
-        - 각 코인별 설정된 비율에 따라 자금 배분
-        - BTC/ETH/SOL: 30%, SUI: 10%
+        [v3.6 개선] 진입 자산 규모 제한 로직 추가
+        - 기존 방식(가용잔고 기반 동적 배분)과 
+        - 총자산 × allocation_pct × position_size_pct 중 작은 값 사용
         """
         if leverage <= 0:
             return "0"
         
-        # [v3.4] allocation_pct 반영한 투자금액 계산
-        allocated = self.portfolio.calculate_invest_amount_for_symbol(self.symbol)
+        # [v3.4] 기존 방식: 가용잔고 기반 allocation_pct 반영한 투자금액
+        allocated_by_available = self.portfolio.calculate_invest_amount_for_symbol(self.symbol)
+        
+        # [v3.6] 새 방식: 총자산 × allocation_pct (상한선)
+        total_equity = self.portfolio.get_total_equity()
+        max_by_equity = total_equity * (self.allocation_pct / 100)
+        
+        # 두 방식 중 작은 값 선택
+        allocated = min(allocated_by_available, max_by_equity)
+        
+        logger.info(f"[{self.symbol}] 📊 자금 배분 비교: "
+                   f"가용잔고 기반=${allocated_by_available:.2f}, "
+                   f"총자산 기반=${max_by_equity:.2f} → 선택: ${allocated:.2f}")
         
         if allocated <= 0:
             logger.warning(f"[{self.symbol}] 배분 가능한 자금이 없습니다")
             return "0"
         
-        # position_size_pct 적용 (95% 사용)
+        # position_size_pct 적용 (99% 사용)
         use = allocated * (self.position_size_pct / 100)
         
         if use < 5:
@@ -1052,8 +1064,8 @@ class TradingBot:
         size = (use * leverage) / price
         size = max(min_size, round(size, self.size_decimals))
         
-        logger.info(f"[{self.symbol}] 💵 배분({self.allocation_pct:.0f}%): ${allocated:.2f}, "
-                   f"사용: ${use:.2f}, Lev {leverage}x → 수량: {size}")
+        logger.info(f"[{self.symbol}] 💵 최종배분({self.allocation_pct:.0f}%): ${allocated:.2f}, "
+                   f"사용({self.position_size_pct}%): ${use:.2f}, Lev {leverage}x → 수량: {size}")
         return self.format_size(size)
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1526,9 +1538,9 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.5 (Binance 신호 + Bitget 매매) + 텔레그램")
-    print("   [v3.4] allocation_pct 정상 반영: 코인별 비율 배분")
+    print("📊 Bitget 자동매매 봇 v3.6 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
+    print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
