@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.7 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -12,6 +12,7 @@ Bitget Futures 자동매매 봇 v3.7 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작 시점(09:00 KST) 캐싱
 - [v3.6] 진입 자산 규모 제한: 기존 방식 vs 총자산×allocation_pct 중 작은 값 사용
 - [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트 전송
+- [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
 ================================================================================
 """
 
@@ -394,7 +395,7 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>Bitget 선물봇 시작 v3.7</b>\n"
+    msg = f"🚀 <b>Bitget 선물봇 시작 v3.8</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📡 신호: Binance API\n"
     msg += f"💹 매매: Bitget API\n"
@@ -1647,10 +1648,11 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.7 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("📊 Bitget 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
     print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
     print("   [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트")
+    print("   [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄 재시도")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
@@ -1688,16 +1690,22 @@ def main():
     bitget_client = BitgetClient(key, secret, pw)
     binance_client = BinancePublicClient()
     
+    # 초기 연결 테스트 (실패해도 계속 진행)
     logger.info(f"📡 Binance 공개 API 연결 테스트...")
     test_ticker = binance_client.get_ticker('BTCUSDT')
     if test_ticker:
         logger.info(f"✅ Binance 연결 성공 - BTC: ${float(test_ticker['price']):,.2f}")
     else:
-        logger.error("❌ Binance 연결 실패")
-        return
+        logger.warning("⚠️ Binance 연결 실패 - 서버 점검 가능성. 다음 스케줄에 재시도합니다.")
+        send_telegram("⚠️ <b>Binance API 연결 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
     
-    pos_mode = bitget_client.get_position_mode()
-    logger.info(f"🔧 Bitget 계좌 포지션 모드: {pos_mode}")
+    # Bitget 포지션 모드 확인 (실패해도 계속 진행)
+    try:
+        pos_mode = bitget_client.get_position_mode()
+        logger.info(f"🔧 Bitget 계좌 포지션 모드: {pos_mode}")
+    except Exception as e:
+        logger.warning(f"⚠️ Bitget 포지션 모드 조회 실패: {e}")
+        pos_mode = "unknown"
     
     portfolio = PortfolioManager(bitget_client, TRADING_CONFIGS)
     bots = [TradingBot(bitget_client, binance_client, c, portfolio) for c in TRADING_CONFIGS if c['enabled']]
@@ -1708,33 +1716,50 @@ def main():
     
     # 텔레그램 시작 알림
     enabled_configs = [c for c in TRADING_CONFIGS if c['enabled']]
-    total_equity = portfolio.get_total_equity()
+    try:
+        total_equity = portfolio.get_total_equity()
+    except:
+        total_equity = 0
     send_bot_start_alert(enabled_configs, total_equity)
     
     logger.info(f"\n{'='*70}")
     logger.info(f"🔥 실행 즉시 거래 (1회)")
     logger.info(f"{'='*70}")
-    portfolio.log_portfolio_status()
+    
+    # API 연결 확인 후 실행
+    try:
+        portfolio.log_portfolio_status()
+    except Exception as e:
+        logger.warning(f"⚠️ 포트폴리오 조회 실패: {e}")
     
     # 거래 결과 초기화
     clear_trade_results()
     
-    for i, bot in enumerate(bots):
+    # API 연결 상태 확인
+    test_ticker = binance_client.get_ticker('BTCUSDT')
+    if test_ticker is None:
+        logger.warning("⚠️ API 조회 실패 (서버 점검 가능성). 이번 사이클을 건너뜁니다.")
+        send_telegram("⚠️ <b>API 조회 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
+    else:
+        for i, bot in enumerate(bots):
+            try:
+                if i > 0:
+                    time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
+                bot.show_status()
+                bot.execute()
+            except Exception as e:
+                logger.error(f"[{bot.symbol}] 실행 오류: {e}")
+                send_error_alert(bot.symbol, str(e))
+                import traceback
+                traceback.print_exc()
+        
+        # 시작 시 종합 메시지 전송
         try:
-            if i > 0:
-                time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
-            bot.show_status()
-            bot.execute()
+            total_equity = portfolio.get_total_equity()
+            available = portfolio.get_available_balance()
+            send_trading_summary(total_equity, available)
         except Exception as e:
-            logger.error(f"[{bot.symbol}] 실행 오류: {e}")
-            send_error_alert(bot.symbol, str(e))
-            import traceback
-            traceback.print_exc()
-    
-    # 시작 시 종합 메시지 전송
-    total_equity = portfolio.get_total_equity()
-    available = portfolio.get_available_balance()
-    send_trading_summary(total_equity, available)
+            logger.warning(f"⚠️ 종합 메시지 전송 실패: {e}")
     
     now = datetime.now(timezone.utc)
     last_executed = {}
@@ -1750,6 +1775,7 @@ def main():
         while True:
             now = datetime.now(timezone.utc)
             executed_count = 0
+            api_failed = False
             
             # 새 봉 시작 시 거래 결과 초기화
             first_bot_executed = False
@@ -1767,14 +1793,30 @@ def main():
                         if executed_count > 0:
                             time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
                         
-                        # 첫 번째 봇 실행 전 거래 결과 초기화
+                        # 첫 번째 봇 실행 전: 거래 결과 초기화 + API 연결 확인
                         if not first_bot_executed:
                             clear_trade_results()
+                            
+                            # API 연결 상태 확인
+                            test_ticker = binance_client.get_ticker('BTCUSDT')
+                            if test_ticker is None:
+                                logger.warning("⚠️ API 조회 실패 (서버 점검 가능성). 이번 사이클을 건너뜁니다.")
+                                send_telegram("⚠️ <b>API 조회 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
+                                api_failed = True
+                                # last_executed는 업데이트하여 같은 봉에서 재시도 방지
+                                for b in bots:
+                                    bk = f"{b.symbol}_{b.timeframe}"
+                                    last_executed[bk] = start
+                                break
+                            
                             first_bot_executed = True
                         
                         logger.info(f"\n🕐 {bot.timeframe} 봉: {start}")
                         if bot == bots[0]:
-                            portfolio.log_portfolio_status()
+                            try:
+                                portfolio.log_portfolio_status()
+                            except Exception as e:
+                                logger.warning(f"⚠️ 포트폴리오 조회 실패: {e}")
                         bot.execute()
                         last_executed[k] = start
                         executed_count += 1
@@ -1784,11 +1826,14 @@ def main():
                     import traceback
                     traceback.print_exc()
             
-            # 모든 봇 실행 후 종합 메시지 전송
-            if executed_count > 0:
-                total_equity = portfolio.get_total_equity()
-                available = portfolio.get_available_balance()
-                send_trading_summary(total_equity, available)
+            # 모든 봇 실행 후 종합 메시지 전송 (API 실패가 아닌 경우에만)
+            if executed_count > 0 and not api_failed:
+                try:
+                    total_equity = portfolio.get_total_equity()
+                    available = portfolio.get_available_balance()
+                    send_trading_summary(total_equity, available)
+                except Exception as e:
+                    logger.warning(f"⚠️ 종합 메시지 전송 실패: {e}")
             
             next_times = [get_next_candle_time(get_candle_start_time(now, b.timeframe), b.timeframe) for b in bots]
             next_run = min(next_times)
