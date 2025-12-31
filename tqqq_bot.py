@@ -1,10 +1,11 @@
 """
 ================================================================================
-TQQQ Sniper 텔레그램 알림 봇
+TQQQ Sniper 텔레그램 알림 봇 v1.1.0 (서버 점검 시 자동 복구)
 ================================================================================
 - TQQQ 가격 및 시그널 분석
 - 매일 지정된 시간에 텔레그램 알림 전송
 - 시그널 변경 시 알림
+- [v1.1.0] API 실패 시 다음 스케줄에 자동 재시도
 ================================================================================
 """
 
@@ -17,6 +18,7 @@ import schedule
 import time
 import logging
 import os
+import signal
 from dotenv import load_dotenv
 
 # .env 파일 로드
@@ -43,6 +45,49 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 API 호출 Timeout Wrapper
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class APITimeoutError(Exception):
+    """API 호출 타임아웃 에러"""
+    pass
+
+
+def _timeout_handler(signum, frame):
+    """타임아웃 시그널 핸들러"""
+    raise APITimeoutError("API 호출 타임아웃")
+
+
+def call_with_timeout(func, timeout=60):
+    """
+    함수를 timeout과 함께 실행 (signal.alarm 방식 - Linux 전용)
+    
+    Args:
+        func: 실행할 함수 (lambda로 전달)
+        timeout: 타임아웃 시간 (초)
+    
+    Returns:
+        함수 실행 결과 또는 None (타임아웃/에러 시)
+    """
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout)
+    
+    try:
+        result = func()
+        signal.alarm(0)
+        return result
+    except APITimeoutError:
+        logger.warning(f"API 호출 타임아웃 ({timeout}초)")
+        return None
+    except Exception as e:
+        signal.alarm(0)
+        logger.warning(f"API 호출 중 오류: {e}")
+        return None
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 📌 텔레그램 함수
@@ -86,10 +131,17 @@ class TQQQAnalyzer:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days_back)
         try:
-            ticker = yf.Ticker('TQQQ')
-            data = ticker.history(start=start_date, end=end_date, auto_adjust=True)
-            if data.empty:
+            # timeout wrapper 적용
+            def fetch_data():
+                ticker = yf.Ticker('TQQQ')
+                return ticker.history(start=start_date, end=end_date, auto_adjust=True)
+            
+            data = call_with_timeout(fetch_data, timeout=60)
+            
+            if data is None or data.empty:
+                logger.error("데이터 로드 실패 또는 빈 데이터")
                 return None
+            
             df = pd.DataFrame({
                 'Open': data['Open'],
                 'High': data['High'],
@@ -255,15 +307,25 @@ def send_tqqq_alert():
     # 데이터 가져오기
     data = analyzer.get_data()
     if data is None:
-        logger.error("데이터를 불러올 수 없습니다.")
-        send_telegram("⚠️ TQQQ 알림 오류\n데이터를 불러올 수 없습니다.")
+        logger.warning("⚠️ 데이터를 불러올 수 없습니다. 다음 스케줄에 재시도합니다.")
+        send_telegram("⚠️ TQQQ 알림 오류\n데이터를 불러올 수 없습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
         return
     
     # 지표 계산
-    data = analyzer.calculate_indicators(data)
+    try:
+        data = analyzer.calculate_indicators(data)
+    except Exception as e:
+        logger.warning(f"⚠️ 지표 계산 실패: {e}. 다음 스케줄에 재시도합니다.")
+        send_telegram(f"⚠️ TQQQ 알림 오류\n지표 계산 실패: {e}\n다음 스케줄 시간에 자동 재시도합니다.")
+        return
     
     # 분석
-    result = analyzer.analyze(data)
+    try:
+        result = analyzer.analyze(data)
+    except Exception as e:
+        logger.warning(f"⚠️ 분석 실패: {e}. 다음 스케줄에 재시도합니다.")
+        send_telegram(f"⚠️ TQQQ 알림 오류\n분석 실패: {e}\n다음 스케줄 시간에 자동 재시도합니다.")
+        return
     
     # 알림 메시지 생성 및 전송
     message = create_alert_message(result)
@@ -277,7 +339,8 @@ def send_tqqq_alert():
 
 def main():
     logger.info("=" * 50)
-    logger.info("TQQQ Sniper 텔레그램 알림 봇 시작")
+    logger.info("TQQQ Sniper 텔레그램 알림 봇 v1.1.0 시작")
+    logger.info("(서버 점검 시 자동 복구 기능 적용)")
     logger.info("=" * 50)
     
     # 시작 시 즉시 한 번 실행 (잘 돌아가는지 확인용)
@@ -295,7 +358,10 @@ def main():
     logger.info("스케줄러 시작. Ctrl+C로 종료.")
     
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logger.error(f"스케줄 실행 중 오류: {e}. 다음 스케줄에 재시도합니다.")
         time.sleep(60)
 
 if __name__ == "__main__":
