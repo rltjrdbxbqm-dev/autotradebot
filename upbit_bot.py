@@ -1,16 +1,16 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.2.5 (진입 자산 규모 제한)
+업비트 자동매매 봇 v2.2.6 (API 에러 처리 강화)
 ================================================================================
 수정 내역:
-1. [v2.2.5] 진입 자산 규모 제한: min(가용KRW/빈슬롯, 총자산/코인개수)
-2. [v2.2.4] 매매 조건을 시가 기준에서 현재가 기준으로 변경
-   - 상승 전략: 4H 시가 > MA → 현재가 > MA
-   - 역방향 전략: 4H 시가 < MA → 현재가 < MA
-   - 오차율 계산: 시가 기준 → 현재가 기준
-3. [Previous] 스토캐스틱 캐시 갱신 시간 수정 (09:05 → 09:00)
-4. [Previous] 4시간봉 이동평균선(MA) 계산 함수 교체
-5. 베이지안 최적화 파라미터 유지
+1. [v2.2.6] API 에러 처리 강화:
+   - retry_api_call() 래퍼 함수 추가 (재시도 로직)
+   - get_krw_balance(): None 반환 시 처리 추가
+   - get_total_asset(): 타임아웃/에러 시 재시도 로직 추가
+   - get_holdings_info(): 동일하게 재시도 로직 추가
+2. [v2.2.5] 진입 자산 규모 제한: min(가용KRW/빈슬롯, 총자산/코인개수)
+3. [v2.2.4] 매매 조건을 시가 기준에서 현재가 기준으로 변경
+4. 베이지안 최적화 파라미터 유지
 ================================================================================
 """
 
@@ -158,6 +158,88 @@ def send_daily_summary(total_asset, krw_balance, holdings):
     send_telegram(msg)
 
 
+def send_trading_summary(total_asset, krw_balance, buy_list, sell_list, hold_list, error_list):
+    """
+    거래 시간대별 종합 메시지 전송
+    모든 거래 내역을 하나의 메시지로 통합하여 전송
+    """
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    msg = f"📊 <b>거래 실행 리포트</b>\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    msg += f"🕐 {now}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 자산 현황
+    msg += f"💰 총 자산: <b>{total_asset:,.0f}원</b>\n"
+    msg += f"💵 KRW 잔고: {krw_balance:,.0f}원\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 매수 내역
+    if buy_list:
+        msg += f"🟢 <b>매수 ({len(buy_list)}건)</b>\n"
+        for buy in buy_list:
+            ticker = buy['ticker']
+            amount = buy['amount']
+            price = buy['price']
+            strategy = buy['strategy']
+            error_rate = buy.get('error_rate')
+            
+            msg += f"  • {ticker}: {amount:,.0f}원\n"
+            msg += f"    └ {price:,.0f}원 ({strategy})"
+            if error_rate is not None:
+                msg += f" 오차:{error_rate:.1f}%"
+            msg += "\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 매도 내역
+    if sell_list:
+        msg += f"🔴 <b>매도 ({len(sell_list)}건)</b>\n"
+        for sell in sell_list:
+            ticker = sell['ticker']
+            price = sell['price']
+            reason = sell['reason']
+            
+            msg += f"  • {ticker}: {price:,.0f}원\n"
+            msg += f"    └ {reason}\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 보유 중인 코인 (간략히)
+    if hold_list:
+        msg += f"📌 <b>보유 중 ({len(hold_list)}개)</b>\n"
+        # 한 줄에 여러 개 표시
+        hold_str = ", ".join(hold_list)
+        # 너무 길면 줄바꿈
+        if len(hold_str) > 40:
+            chunks = [hold_list[i:i+5] for i in range(0, len(hold_list), 5)]
+            for chunk in chunks:
+                msg += f"  {', '.join(chunk)}\n"
+        else:
+            msg += f"  {hold_str}\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 에러 내역
+    if error_list:
+        msg += f"⚠️ <b>오류 ({len(error_list)}건)</b>\n"
+        for err in error_list[:5]:  # 최대 5개만 표시
+            msg += f"  • {err}\n"
+        if len(error_list) > 5:
+            msg += f"  ... 외 {len(error_list) - 5}건\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 거래 없음
+    if not buy_list and not sell_list and not error_list:
+        msg += f"ℹ️ 이번 시간대 거래 없음\n"
+        if hold_list:
+            msg += f"   {len(hold_list)}개 코인 보유 유지\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 요약
+    msg += f"📋 매수: {len(buy_list)}건 / 매도: {len(sell_list)}건"
+    
+    send_telegram(msg)
+
+
 def send_error_alert(error_message):
     """에러 알림 전송"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -175,10 +257,10 @@ def send_start_alert(status_loaded=False):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.5)</b>\n"
+    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.6)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 전략: MA + 스토캐스틱 + 역방향\n"
-    msg += f"🛠️ 수정: 진입자산 상한선 적용\n"
+    msg += f"🛠️ 수정: API 에러 처리 강화\n"
     msg += f"🪙 대상: {len(COINS)}개 코인\n"
     if status_loaded:
         msg += f"📂 이전 상태: 복원됨\n"
@@ -270,6 +352,44 @@ def setup_shutdown_handlers():
 # ============================================================
 
 upbit = Upbit(ACCESS_KEY, SECRET_KEY)
+
+
+# ============================================================
+# API 호출 재시도 래퍼
+# ============================================================
+
+def retry_api_call(func, max_retries=3, delay=2.0, default=None):
+    """
+    API 호출 재시도 래퍼
+    
+    Args:
+        func: 실행할 함수 (lambda로 전달)
+        max_retries: 최대 재시도 횟수
+        delay: 재시도 간 대기 시간 (초)
+        default: 모든 재시도 실패 시 반환할 기본값
+    
+    Returns:
+        API 호출 결과 또는 default 값
+    """
+    last_error = None
+    for attempt in range(max_retries):
+        try:
+            result = func()
+            if result is not None:
+                return result
+            # None이 반환된 경우도 재시도
+            logging.warning(f"API 호출 결과가 None입니다. 재시도 {attempt + 1}/{max_retries}")
+        except Exception as e:
+            last_error = e
+            logging.warning(f"API 호출 실패 (시도 {attempt + 1}/{max_retries}): {e}")
+        
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    
+    if last_error:
+        logging.error(f"API 호출 최종 실패: {last_error}")
+    return default
+
 
 # 거래 대상 코인 리스트 (20개)
 # ============================================================
@@ -551,30 +671,60 @@ def initialize_status():
 # ============================================================
 
 def get_krw_balance():
-    """KRW 잔고 조회"""
+    """KRW 잔고 조회 (재시도 및 None 처리 포함)"""
     try:
-        return float(upbit.get_balance("KRW"))
+        result = retry_api_call(
+            lambda: upbit.get_balance("KRW"),
+            max_retries=3,
+            delay=2.0,
+            default=None
+        )
+        
+        if result is None:
+            logging.error("KRW 잔고 조회 실패: API가 None을 반환했습니다.")
+            return 0
+        
+        return float(result)
     except Exception as e:
         logging.error(f"KRW 잔고 조회 중 오류: {e}")
         return 0
 
 
 def get_total_asset():
-    """총 자산 계산"""
+    """총 자산 계산 (재시도 및 개별 에러 처리 포함)"""
     try:
-        balances = upbit.get_balances()
+        # 잔고 조회 (재시도 포함)
+        balances = retry_api_call(
+            lambda: upbit.get_balances(),
+            max_retries=3,
+            delay=3.0,
+            default=None
+        )
+        
+        if balances is None:
+            logging.error("잔고 조회 실패: API가 None을 반환했습니다.")
+            return 0
+        
         total_asset = 0.0
         
         for balance in balances:
-            if balance['currency'] != 'KRW':
-                ticker = f"KRW-{balance['currency']}"
-                current_price = get_current_price(ticker)
-                time.sleep(0.1)
-                if current_price:
-                    coin_value = float(balance['balance']) * current_price
-                    total_asset += coin_value
-            else:
-                total_asset += float(balance['balance'])
+            try:
+                if balance['currency'] != 'KRW':
+                    ticker = f"KRW-{balance['currency']}"
+                    current_price = get_current_price(ticker)
+                    time.sleep(0.1)
+                    if current_price:
+                        balance_amount = balance.get('balance')
+                        if balance_amount is not None:
+                            coin_value = float(balance_amount) * current_price
+                            total_asset += coin_value
+                else:
+                    balance_amount = balance.get('balance')
+                    if balance_amount is not None:
+                        total_asset += float(balance_amount)
+            except Exception as e:
+                logging.warning(f"개별 잔고 처리 중 오류: {balance.get('currency', 'unknown')} - {e}")
+                continue
 
         return total_asset
     except Exception as e:
@@ -583,24 +733,39 @@ def get_total_asset():
 
 
 def get_holdings_info():
-    """보유 코인 정보 조회"""
+    """보유 코인 정보 조회 (재시도 및 에러 처리 포함)"""
     try:
-        balances = upbit.get_balances()
+        balances = retry_api_call(
+            lambda: upbit.get_balances(),
+            max_retries=3,
+            delay=2.0,
+            default=None
+        )
+        
+        if balances is None:
+            logging.error("보유 코인 조회 실패: API가 None을 반환했습니다.")
+            return {}
+        
         holdings = {}
         
         for balance in balances:
-            if balance['currency'] != 'KRW' and float(balance['balance']) > 0:
-                ticker = f"KRW-{balance['currency']}"
-                current_price = get_current_price(ticker)
-                time.sleep(0.1)
-                if current_price:
-                    coin_value = float(balance['balance']) * current_price
-                    if coin_value >= 1000:
-                        holdings[balance['currency']] = {
-                            'balance': float(balance['balance']),
-                            'price': current_price,
-                            'value': coin_value
-                        }
+            try:
+                balance_amount = balance.get('balance')
+                if balance['currency'] != 'KRW' and balance_amount and float(balance_amount) > 0:
+                    ticker = f"KRW-{balance['currency']}"
+                    current_price = get_current_price(ticker)
+                    time.sleep(0.1)
+                    if current_price:
+                        coin_value = float(balance_amount) * current_price
+                        if coin_value >= 1000:
+                            holdings[balance['currency']] = {
+                                'balance': float(balance_amount),
+                                'price': current_price,
+                                'value': coin_value
+                            }
+            except Exception as e:
+                logging.warning(f"보유 코인 처리 중 오류: {balance.get('currency', 'unknown')} - {e}")
+                continue
         
         return holdings
     except Exception as e:
@@ -912,7 +1077,7 @@ def check_reverse_strategy(ticker, current_price, ma_price):
 # ============================================================
 
 def trade_strategy():
-    """거래 전략 실행"""
+    """거래 전략 실행 (종합 메시지 전송)"""
     try:
         krw_balance = get_krw_balance()
         total_asset = get_total_asset()
@@ -923,8 +1088,11 @@ def trade_strategy():
         logging.info(f"💵 KRW 잔고: {krw_balance:,.0f} KRW")
         logging.info("=" * 80)
         
-        buy_count = 0
-        sell_count = 0
+        # 거래 내역 수집용 리스트
+        buy_list = []      # 매수 내역
+        sell_list = []     # 매도 내역
+        hold_list = []     # 보유 중인 코인
+        error_list = []    # 에러 내역
 
         for ticker in COINS:
             time.sleep(0.2)
@@ -943,6 +1111,7 @@ def trade_strategy():
             
             if opening_price_4h is None or ma_price is None or current_price is None:
                 logging.error(f"{ticker} 데이터가 유효하지 않아 매매 건너뜀")
+                error_list.append(f"{ticker.split('-')[1]}: 데이터 조회 실패")
                 continue
             
             coin_currency = ticker.split('-')[1]
@@ -991,16 +1160,16 @@ def trade_strategy():
                     
                     try:
                         upbit.buy_market_order(ticker, invest_amount)
-                        buy_count += 1
                         
-                        send_trade_alert(
-                            trade_type="BUY",
-                            ticker=ticker,
-                            amount=invest_amount,
-                            strategy=strategy_type,
-                            price=current_price,
-                            error_rate=error_rate if strategy_type == "역방향" else None
-                        )
+                        # 매수 내역 수집
+                        buy_info = {
+                            'ticker': coin_currency,
+                            'amount': invest_amount,
+                            'price': current_price,
+                            'strategy': strategy_type,
+                            'error_rate': error_rate if strategy_type == "역방향" else None
+                        }
+                        buy_list.append(buy_info)
                         
                         if strategy_type == "역방향":
                             logging.info(f"🔴 {ticker} 역방향 매수 주문 성공: {invest_amount:,.0f} KRW")
@@ -1009,8 +1178,11 @@ def trade_strategy():
                             
                     except Exception as e:
                         logging.error(f"{ticker} 매수 주문 실패: {e}")
-                        send_error_alert(f"{ticker} 매수 주문 실패: {e}")
+                        error_list.append(f"{coin_currency}: 매수 실패 - {str(e)[:30]}")
                 else:
+                    # 보유 중인 코인 수집
+                    hold_list.append(f"{coin_currency}({strategy_type})")
+                    
                     if strategy_type == "역방향":
                         logging.info(f"✅ {ticker} 역방향 전략 보유 중")
                     else:
@@ -1019,7 +1191,6 @@ def trade_strategy():
                 if current_balance > 0:
                     try:
                         upbit.sell_market_order(ticker, current_balance)
-                        sell_count += 1
                         
                         if not ma_condition:
                             sell_reason = "MA 조건 위반"
@@ -1028,18 +1199,19 @@ def trade_strategy():
                         else:
                             sell_reason = "조건 미충족"
                         
-                        send_trade_alert(
-                            trade_type="SELL",
-                            ticker=ticker,
-                            quantity=current_balance,
-                            strategy=sell_reason,
-                            price=current_price
-                        )
+                        # 매도 내역 수집
+                        sell_info = {
+                            'ticker': coin_currency,
+                            'quantity': current_balance,
+                            'price': current_price,
+                            'reason': sell_reason
+                        }
+                        sell_list.append(sell_info)
                         
                         logging.info(f"🔵 {ticker} 전량 매도 ({sell_reason})")
                     except Exception as e:
                         logging.error(f"{ticker} 매도 주문 실패: {e}")
-                        send_error_alert(f"{ticker} 매도 주문 실패: {e}")
+                        error_list.append(f"{coin_currency}: 매도 실패 - {str(e)[:30]}")
                 else:
                     reasons = []
                     if not ma_condition:
@@ -1054,17 +1226,20 @@ def trade_strategy():
                     
                     logging.info(f"⬜ {ticker} 대기 중 ({', '.join(reasons)})")
         
-        if buy_count > 0 or sell_count > 0:
-            summary_msg = f"📋 <b>거래 실행 완료</b>\n"
-            summary_msg += f"━━━━━━━━━━━━━━━\n"
-            summary_msg += f"🟢 매수: {buy_count}건\n"
-            summary_msg += f"🔴 매도: {sell_count}건\n"
-            summary_msg += f"💰 총 자산: {total_asset:,.0f}원"
-            send_telegram(summary_msg)
+        # 종합 메시지 전송
+        send_trading_summary(
+            total_asset=total_asset,
+            krw_balance=krw_balance,
+            buy_list=buy_list,
+            sell_list=sell_list,
+            hold_list=hold_list,
+            error_list=error_list
+        )
                 
         logging.info("=" * 80)
         logging.info(f"📊 거래 전략 실행 완료 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logging.info(f"   매수: {buy_count}건 / 매도: {sell_count}건")
+        logging.info(f"   매수: {len(buy_list)}건 / 매도: {len(sell_list)}건")
+        logging.info("=" * 80)
         logging.info("=" * 80)
         
         save_status()
@@ -1090,7 +1265,7 @@ def send_daily_report():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 업비트 자동매매 봇 v2.2.5 (진입 자산 규모 제한)")
+    logging.info("🤖 업비트 자동매매 봇 v2.2.6 (API 에러 처리 강화)")
     logging.info("=" * 80)
     logging.info("📦 개선 사항:")
     logging.info("   1. [NEW] 진입 자산: min(가용KRW/빈슬롯, 총자산/코인개수)")
