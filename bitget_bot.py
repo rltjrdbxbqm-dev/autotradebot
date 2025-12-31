@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.6 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.7 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -11,6 +11,7 @@ Bitget Futures 자동매매 봇 v3.6 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.4] allocation_pct 정상 반영: 코인별 비율 배분 (BTC/ETH/SOL 30%, SUI 10%)
 - [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작 시점(09:00 KST) 캐싱
 - [v3.6] 진입 자산 규모 제한: 기존 방식 vs 총자산×allocation_pct 중 작은 값 사용
+- [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트 전송
 ================================================================================
 """
 
@@ -157,6 +158,18 @@ RETRY_INTERVAL = 60
 BOT_START_TIME = None
 SHUTDOWN_SENT = False
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 거래 결과 수집용 전역 변수 (종합 메시지용)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+trade_results = {
+    'entries': [],      # 진입 내역
+    'closes': [],       # 청산 내역
+    'holds': [],        # 유지 중인 포지션
+    'errors': [],       # 에러 내역
+    'leverage_changes': []  # 레버리지 변경 내역
+}
+
 # 로깅
 def setup_logging():
     logger = logging.getLogger('BitgetBot')
@@ -209,85 +222,179 @@ def send_telegram(message: str) -> bool:
 
 def send_entry_alert(symbol: str, side: str, size: str, price: float, 
                      leverage: int, order_type: str = "지정가"):
-    """포지션 진입 알림"""
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    """포지션 진입 내역 수집 (종합 메시지용)"""
+    global trade_results
     
-    emoji = "🟢" if side.lower() == "long" else "🔴"
-    
-    msg = f"{emoji} <b>Bitget 선물 진입</b>\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"📌 심볼: <b>{symbol}</b>\n"
-    msg += f"📊 방향: {side.upper()}\n"
-    msg += f"💰 가격: ${price:,.2f}\n"
-    msg += f"📐 수량: {size}\n"
-    msg += f"⚡ 레버리지: {leverage}x\n"
-    msg += f"📋 주문유형: {order_type}\n"
-    msg += f"📡 신호: Binance\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"🕐 {now}"
-    
-    send_telegram(msg)
+    trade_results['entries'].append({
+        'symbol': symbol,
+        'side': side,
+        'size': size,
+        'price': price,
+        'leverage': leverage,
+        'order_type': order_type
+    })
 
 
 def send_close_alert(symbol: str, size: float, entry_price: float, 
                      exit_price: float, pnl: float, reason: str = ""):
-    """포지션 청산 알림"""
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    """포지션 청산 내역 수집 (종합 메시지용)"""
+    global trade_results
     
-    pnl_emoji = "💚" if pnl >= 0 else "❤️"
-    pnl_sign = "+" if pnl >= 0 else ""
-    
-    msg = f"🔴 <b>Bitget 선물 청산</b>\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"📌 심볼: <b>{symbol}</b>\n"
-    msg += f"📐 수량: {size}\n"
-    msg += f"📈 진입가: ${entry_price:,.2f}\n"
-    msg += f"📉 청산가: ${exit_price:,.2f}\n"
-    msg += f"{pnl_emoji} 손익: <b>{pnl_sign}{pnl:,.2f} USDT</b>\n"
-    if reason:
-        msg += f"📋 사유: {reason}\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"🕐 {now}"
-    
-    send_telegram(msg)
+    trade_results['closes'].append({
+        'symbol': symbol,
+        'size': size,
+        'entry_price': entry_price,
+        'exit_price': exit_price,
+        'pnl': pnl,
+        'reason': reason
+    })
 
 
 def send_leverage_change_alert(symbol: str, old_lev: int, new_lev: int):
-    """레버리지 변경 알림"""
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    """레버리지 변경 내역 수집 (종합 메시지용)"""
+    global trade_results
     
-    old_str = f"{old_lev}x" if old_lev > 0 else "현금"
-    new_str = f"{new_lev}x" if new_lev > 0 else "현금"
-    
-    msg = f"🔄 <b>레버리지 변경</b>\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"📌 심볼: <b>{symbol}</b>\n"
-    msg += f"📊 변경: {old_str} → {new_str}\n"
-    msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"🕐 {now}"
-    
-    send_telegram(msg)
+    trade_results['leverage_changes'].append({
+        'symbol': symbol,
+        'old_lev': old_lev,
+        'new_lev': new_lev
+    })
 
 
 def send_error_alert(symbol: str, error_message: str):
-    """에러 알림"""
+    """에러 내역 수집 (종합 메시지용)"""
+    global trade_results
+    
+    trade_results['errors'].append({
+        'symbol': symbol,
+        'error': error_message
+    })
+
+
+def clear_trade_results():
+    """거래 결과 초기화"""
+    global trade_results
+    trade_results = {
+        'entries': [],
+        'closes': [],
+        'holds': [],
+        'errors': [],
+        'leverage_changes': []
+    }
+
+
+def add_hold_position(symbol: str, size: float, leverage: int, pnl: float):
+    """보유 유지 포지션 추가"""
+    global trade_results
+    trade_results['holds'].append({
+        'symbol': symbol,
+        'size': size,
+        'leverage': leverage,
+        'pnl': pnl
+    })
+
+
+def send_trading_summary(total_equity: float, available: float):
+    """
+    거래 시간대별 종합 메시지 전송
+    모든 거래 내역을 하나의 메시지로 통합하여 전송
+    """
+    global trade_results
+    
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"⚠️ <b>오류 발생</b>\n"
+    msg = f"📊 <b>Bitget 거래 리포트</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"📌 심볼: {symbol}\n"
-    msg += f"❌ 오류: {error_message}\n"
+    msg += f"🕐 {now}\n"
     msg += f"━━━━━━━━━━━━━━━\n"
-    msg += f"🕐 {now}"
+    
+    # 자산 현황
+    msg += f"💰 총 자산: <b>${total_equity:,.2f}</b>\n"
+    msg += f"💵 가용 잔고: ${available:,.2f}\n"
+    msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 진입 내역
+    if trade_results['entries']:
+        msg += f"🟢 <b>진입 ({len(trade_results['entries'])}건)</b>\n"
+        for entry in trade_results['entries']:
+            msg += f"  • {entry['symbol']}: ${entry['price']:,.2f}\n"
+            msg += f"    └ {entry['size']} @ {entry['leverage']}x ({entry['order_type']})\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 청산 내역
+    if trade_results['closes']:
+        msg += f"🔴 <b>청산 ({len(trade_results['closes'])}건)</b>\n"
+        total_pnl = 0
+        for close in trade_results['closes']:
+            pnl = close['pnl']
+            total_pnl += pnl
+            pnl_emoji = "💚" if pnl >= 0 else "❤️"
+            pnl_sign = "+" if pnl >= 0 else ""
+            msg += f"  • {close['symbol']}: {pnl_sign}{pnl:,.2f} {pnl_emoji}\n"
+            if close['reason']:
+                msg += f"    └ {close['reason']}\n"
+        
+        total_emoji = "💚" if total_pnl >= 0 else "❤️"
+        total_sign = "+" if total_pnl >= 0 else ""
+        msg += f"  📋 합계: {total_sign}{total_pnl:,.2f} USDT {total_emoji}\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 레버리지 변경 내역
+    if trade_results['leverage_changes']:
+        msg += f"🔄 <b>레버리지 변경 ({len(trade_results['leverage_changes'])}건)</b>\n"
+        for lev in trade_results['leverage_changes']:
+            old_str = f"{lev['old_lev']}x" if lev['old_lev'] > 0 else "현금"
+            new_str = f"{lev['new_lev']}x" if lev['new_lev'] > 0 else "현금"
+            msg += f"  • {lev['symbol']}: {old_str} → {new_str}\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 보유 유지 포지션
+    if trade_results['holds']:
+        msg += f"📌 <b>보유 유지 ({len(trade_results['holds'])}개)</b>\n"
+        for hold in trade_results['holds']:
+            pnl = hold['pnl']
+            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+            pnl_sign = "+" if pnl >= 0 else ""
+            msg += f"  {pnl_emoji} {hold['symbol']}: {hold['leverage']}x ({pnl_sign}{pnl:,.2f})\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 에러 내역
+    if trade_results['errors']:
+        msg += f"⚠️ <b>오류 ({len(trade_results['errors'])}건)</b>\n"
+        for err in trade_results['errors'][:5]:  # 최대 5개만 표시
+            msg += f"  • {err['symbol']}: {err['error'][:40]}\n"
+        if len(trade_results['errors']) > 5:
+            msg += f"  ... 외 {len(trade_results['errors']) - 5}건\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 거래 없음
+    entries = len(trade_results['entries'])
+    closes = len(trade_results['closes'])
+    lev_changes = len(trade_results['leverage_changes'])
+    
+    if entries == 0 and closes == 0 and lev_changes == 0 and not trade_results['errors']:
+        holds_count = len(trade_results['holds'])
+        if holds_count > 0:
+            msg += f"ℹ️ 이번 시간대 거래 없음\n"
+            msg += f"   {holds_count}개 포지션 유지\n"
+        else:
+            msg += f"ℹ️ 이번 시간대 거래 없음 (현금 유지)\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+    
+    # 요약
+    msg += f"📋 진입: {entries}건 / 청산: {closes}건"
     
     send_telegram(msg)
+    
+    # 결과 초기화
+    clear_trade_results()
 
 
 def send_bot_start_alert(configs: List[Dict], total_equity: float):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>Bitget 선물봇 시작 v3.5</b>\n"
+    msg = f"🚀 <b>Bitget 선물봇 시작 v3.7</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📡 신호: Binance API\n"
     msg += f"💹 매매: Bitget API\n"
@@ -1495,6 +1602,8 @@ class TradingBot:
                 self.adjust_leverage(target_lev)
             else:
                 logger.info(f"[{self.symbol}] ➡️ Long 유지")
+                # 포지션 유지 내역 추가
+                add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
         elif action == 'CASH':
             if has_pos:
                 is_bull, _, _ = self.get_stochastic_signal()
@@ -1538,9 +1647,10 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.6 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("📊 Bitget 자동매매 봇 v3.7 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
     print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
+    print("   [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
@@ -1605,6 +1715,10 @@ def main():
     logger.info(f"🔥 실행 즉시 거래 (1회)")
     logger.info(f"{'='*70}")
     portfolio.log_portfolio_status()
+    
+    # 거래 결과 초기화
+    clear_trade_results()
+    
     for i, bot in enumerate(bots):
         try:
             if i > 0:
@@ -1616,6 +1730,11 @@ def main():
             send_error_alert(bot.symbol, str(e))
             import traceback
             traceback.print_exc()
+    
+    # 시작 시 종합 메시지 전송
+    total_equity = portfolio.get_total_equity()
+    available = portfolio.get_available_balance()
+    send_trading_summary(total_equity, available)
     
     now = datetime.now(timezone.utc)
     last_executed = {}
@@ -1631,6 +1750,10 @@ def main():
         while True:
             now = datetime.now(timezone.utc)
             executed_count = 0
+            
+            # 새 봉 시작 시 거래 결과 초기화
+            first_bot_executed = False
+            
             for bot in bots:
                 try:
                     start = get_candle_start_time(now, bot.timeframe)
@@ -1643,6 +1766,12 @@ def main():
                             time.sleep(CANDLE_START_DELAY - elapsed)
                         if executed_count > 0:
                             time.sleep(SYMBOL_DELAY_SECONDS)  # Rate Limit 방지
+                        
+                        # 첫 번째 봇 실행 전 거래 결과 초기화
+                        if not first_bot_executed:
+                            clear_trade_results()
+                            first_bot_executed = True
+                        
                         logger.info(f"\n🕐 {bot.timeframe} 봉: {start}")
                         if bot == bots[0]:
                             portfolio.log_portfolio_status()
@@ -1654,6 +1783,12 @@ def main():
                     send_error_alert(bot.symbol, str(e))
                     import traceback
                     traceback.print_exc()
+            
+            # 모든 봇 실행 후 종합 메시지 전송
+            if executed_count > 0:
+                total_equity = portfolio.get_total_equity()
+                available = portfolio.get_available_balance()
+                send_trading_summary(total_equity, available)
             
             next_times = [get_next_candle_time(get_candle_start_time(now, b.timeframe), b.timeframe) for b in bots]
             next_run = min(next_times)
