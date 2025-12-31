@@ -319,62 +319,62 @@ COINS = [
 
 # 이동평균선 기간 (4시간봉 기준)
 MA_PERIODS = {
-    'KRW-BONK': 147,  # CAGR 2087.4%
-    'KRW-UNI': 270,  # CAGR 1367.4%
-    'KRW-SUI': 232,  # CAGR 653.8%
-    'KRW-MNT': 216,  # CAGR 594.7%
-    'KRW-MOVE': 200,  # CAGR 382.2%
-    'KRW-AKT': 68,  # CAGR 328.5%
-    'KRW-IMX': 116,  # CAGR 278.0%
-    'KRW-ARB': 52,  # CAGR 267.5%
-    'KRW-VET': 46,  # CAGR 231.9%
-    'KRW-SAND': 234,  # CAGR 230.4%
-    'KRW-HBAR': 76,  # CAGR 229.9%
-    'KRW-GRT': 239,  # CAGR 229.9%
-    'KRW-AVAX': 55,  # CAGR 226.5%
-    'KRW-NEAR': 200,  # CAGR 188.5%
-    'KRW-SOL': 60,  # CAGR 183.9%
-    'KRW-THETA': 221,  # CAGR 174.5%
-    'KRW-MANA': 195,  # CAGR 172.3%
-    'KRW-XRP': 100,  # CAGR 168.3%
-    'KRW-ANKR': 163,  # CAGR 163.9%
-    'KRW-ADA': 93,  # CAGR 162.6%
-    'KRW-POL': 50,  # CAGR 156.8%
-    'KRW-CRO': 112,  # CAGR 154.5%
-    'KRW-DOT': 52,  # CAGR 147.1%
-    'KRW-MVL': 298,  # CAGR 146.5%
-    'KRW-ETH': 110,  # CAGR 140.0%
-    'KRW-WAXP': 56,  # CAGR 135.4%
-    'KRW-DOGE': 70,  # CAGR 128.9%
-    'KRW-XLM': 66,  # CAGR 126.6%
-    'KRW-LINK': 61,  # CAGR 119.1%
-    'KRW-AXS': 283,  # CAGR 107.3%
-    'KRW-BTC': 117,  # CAGR 104.3%
-    'KRW-BCH': 97,  # CAGR 80.4%
+    'KRW-BONK': 122,  # Modified (Binance Result)
+    'KRW-UNI': 250,
+    'KRW-SUI': 298,  # Modified (Binance Result)
+    'KRW-MNT': 216,
+    'KRW-MOVE': 200,
+    'KRW-AKT': 68,
+    'KRW-IMX': 116,
+    'KRW-ARB': 52,
+    'KRW-VET': 46,
+    'KRW-SAND': 218,  # Modified (Binance Result)
+    'KRW-HBAR': 104,  # Modified (Binance Result)
+    'KRW-GRT': 239,
+    'KRW-AVAX': 55,
+    'KRW-NEAR': 200,
+    'KRW-SOL': 258,  # Modified (Binance Result)
+    'KRW-THETA': 221,
+    'KRW-MANA': 84,   # Modified (Binance Result)
+    'KRW-XRP': 100,
+    'KRW-ANKR': 163,
+    'KRW-ADA': 128,   # Modified (Binance Result)
+    'KRW-POL': 50,
+    'KRW-CRO': 112,
+    'KRW-DOT': 52,
+    'KRW-MVL': 298,
+    'KRW-ETH': 110,
+    'KRW-WAXP': 56,
+    'KRW-DOGE': 70,
+    'KRW-XLM': 66,
+    'KRW-LINK': 61,
+    'KRW-AXS': 283,
+    'KRW-BTC': 117,
+    'KRW-BCH': 97,
 }
 
 # STOCH_PARAMS
 STOCH_PARAMS = {
-    'KRW-BONK': {'k_period': 96, 'k_smooth': 67, 'd_period': 28},
-    'KRW-UNI': {'k_period': 170, 'k_smooth': 60, 'd_period': 30},
-    'KRW-SUI': {'k_period': 139, 'k_smooth': 38, 'd_period': 5},
+    'KRW-BONK': {'k_period': 155, 'k_smooth': 54, 'd_period': 14}, # Modified
+    'KRW-UNI': {'k_period': 145, 'k_smooth': 30, 'd_period': 7},
+    'KRW-SUI': {'k_period': 160, 'k_smooth': 34, 'd_period': 7},   # Modified
     'KRW-MNT': {'k_period': 177, 'k_smooth': 23, 'd_period': 26},
     'KRW-MOVE': {'k_period': 70, 'k_smooth': 50, 'd_period': 30},
     'KRW-AKT': {'k_period': 142, 'k_smooth': 46, 'd_period': 13},
     'KRW-IMX': {'k_period': 58, 'k_smooth': 19, 'd_period': 14},
     'KRW-ARB': {'k_period': 118, 'k_smooth': 46, 'd_period': 23},
     'KRW-VET': {'k_period': 101, 'k_smooth': 45, 'd_period': 8},
-    'KRW-SAND': {'k_period': 116, 'k_smooth': 27, 'd_period': 9},
-    'KRW-HBAR': {'k_period': 159, 'k_smooth': 33, 'd_period': 5},
+    'KRW-SAND': {'k_period': 125, 'k_smooth': 30, 'd_period': 6},  # Modified
+    'KRW-HBAR': {'k_period': 50, 'k_smooth': 34, 'd_period': 19},  # Modified
     'KRW-GRT': {'k_period': 107, 'k_smooth': 25, 'd_period': 4},
     'KRW-AVAX': {'k_period': 133, 'k_smooth': 35, 'd_period': 10},
     'KRW-NEAR': {'k_period': 160, 'k_smooth': 30, 'd_period': 25},
-    'KRW-SOL': {'k_period': 180, 'k_smooth': 25, 'd_period': 5},
+    'KRW-SOL': {'k_period': 80, 'k_smooth': 26, 'd_period': 6},    # Modified
     'KRW-THETA': {'k_period': 166, 'k_smooth': 57, 'd_period': 7},
-    'KRW-MANA': {'k_period': 50, 'k_smooth': 30, 'd_period': 5},
+    'KRW-MANA': {'k_period': 130, 'k_smooth': 38, 'd_period': 14}, # Modified
     'KRW-XRP': {'k_period': 40, 'k_smooth': 22, 'd_period': 6},
     'KRW-ANKR': {'k_period': 227, 'k_smooth': 60, 'd_period': 7},
-    'KRW-ADA': {'k_period': 178, 'k_smooth': 17, 'd_period': 26},
+    'KRW-ADA': {'k_period': 200, 'k_smooth': 34, 'd_period': 9},   # Modified
     'KRW-POL': {'k_period': 216, 'k_smooth': 28, 'd_period': 5},
     'KRW-CRO': {'k_period': 69, 'k_smooth': 46, 'd_period': 3},
     'KRW-DOT': {'k_period': 160, 'k_smooth': 33, 'd_period': 6},
@@ -391,26 +391,26 @@ STOCH_PARAMS = {
 
 # REVERSE_ERROR_RATE_CONFIG
 REVERSE_ERROR_RATE_CONFIG = {
-    'KRW-BONK': {'error_rate': -21, 'hold_hours': 18},
-    'KRW-UNI': {'error_rate': -20, 'hold_hours': 24},
-    'KRW-SUI': {'error_rate': -28, 'hold_hours': 17},
+    'KRW-BONK': {'error_rate': -20, 'hold_hours': 16},  # Modified
+    'KRW-UNI': {'error_rate': -38, 'hold_hours': 54},   # Modified
+    'KRW-SUI': {'error_rate': -30, 'hold_hours': 18},   # Modified
     'KRW-MNT': {'error_rate': -33, 'hold_hours': 19},
     'KRW-MOVE': {'error_rate': -25, 'hold_hours': 12},
     'KRW-AKT': {'error_rate': -19, 'hold_hours': 13},
     'KRW-IMX': {'error_rate': -26, 'hold_hours': 44},
     'KRW-ARB': {'error_rate': -17, 'hold_hours': 37},
     'KRW-VET': {'error_rate': -19, 'hold_hours': 80},
-    'KRW-SAND': {'error_rate': -44, 'hold_hours': 403},
-    'KRW-HBAR': {'error_rate': -16, 'hold_hours': 39},
+    'KRW-SAND': {'error_rate': -36, 'hold_hours': 70}, # Modified
+    'KRW-HBAR': {'error_rate': -18, 'hold_hours': 16},  # Modified
     'KRW-GRT': {'error_rate': -34, 'hold_hours': 94},
     'KRW-AVAX': {'error_rate': -12, 'hold_hours': 19},
     'KRW-NEAR': {'error_rate': -25, 'hold_hours': 32},
-    'KRW-SOL': {'error_rate': -65, 'hold_hours': 16},
+    'KRW-SOL': {'error_rate': -54, 'hold_hours': 12},   # Modified
     'KRW-THETA': {'error_rate': -42, 'hold_hours': 138},
-    'KRW-MANA': {'error_rate': -54, 'hold_hours': 82},
+    'KRW-MANA': {'error_rate': -26, 'hold_hours': 52}, # Modified
     'KRW-XRP': {'error_rate': -56, 'hold_hours': 217},
     'KRW-ANKR': {'error_rate': -34, 'hold_hours': 120},
-    'KRW-ADA': {'error_rate': -28, 'hold_hours': 238},
+    'KRW-ADA': {'error_rate': -16, 'hold_hours': 14},   # Modified
     'KRW-POL': {'error_rate': -14, 'hold_hours': 35},
     'KRW-CRO': {'error_rate': -48, 'hold_hours': 207},
     'KRW-DOT': {'error_rate': -15, 'hold_hours': 39},
