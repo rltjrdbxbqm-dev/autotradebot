@@ -392,7 +392,7 @@ STOCH_PARAMS = {
 # REVERSE_ERROR_RATE_CONFIG
 REVERSE_ERROR_RATE_CONFIG = {
     'KRW-BONK': {'error_rate': -20, 'hold_hours': 16},  # Modified
-    'KRW-UNI': {'error_rate': -38, 'hold_hours': 54},   # Modified
+    'KRW-UNI': {'error_rate': -38, 'hold_hours': 54},
     'KRW-SUI': {'error_rate': -30, 'hold_hours': 18},   # Modified
     'KRW-MNT': {'error_rate': -33, 'hold_hours': 19},
     'KRW-MOVE': {'error_rate': -25, 'hold_hours': 12},
@@ -424,7 +424,6 @@ REVERSE_ERROR_RATE_CONFIG = {
     'KRW-BTC': {'error_rate': -31, 'hold_hours': 145},
     'KRW-BCH': {'error_rate': -61, 'hold_hours': 43},
 }
-
 # 매수 상태 추적을 위한 글로벌 변수
 buy_status = {}
 
