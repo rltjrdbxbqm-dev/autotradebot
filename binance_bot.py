@@ -1311,17 +1311,24 @@ def main():
     # 시작 알림
     send_start_alert(status_loaded)
     
-    # 스케줄 설정 (UTC 기준 4시간봉 시작 시점)
-    schedule.every().day.at("00:00").do(trade_strategy)
-    schedule.every().day.at("04:00").do(trade_strategy)
-    schedule.every().day.at("08:00").do(trade_strategy)
-    schedule.every().day.at("12:00").do(trade_strategy)
-    schedule.every().day.at("16:00").do(trade_strategy)
-    schedule.every().day.at("20:00").do(trade_strategy)
+# 스케줄 설정 (KST 서버 기준 - 바이낸스 UTC 4H 캔들 시작에 맞춤)
+    # UTC 00:00 = KST 09:00
+    # UTC 04:00 = KST 13:00
+    # UTC 08:00 = KST 17:00
+    # UTC 12:00 = KST 21:00
+    # UTC 16:00 = KST 01:00 (다음날)
+    # UTC 20:00 = KST 05:00 (다음날)
+    
+    schedule.every().day.at("01:00").do(trade_strategy)  # UTC 16:00
+    schedule.every().day.at("05:00").do(trade_strategy)  # UTC 20:00
+    schedule.every().day.at("09:00").do(trade_strategy)  # UTC 00:00
+    schedule.every().day.at("13:00").do(trade_strategy)  # UTC 04:00
+    schedule.every().day.at("17:00").do(trade_strategy)  # UTC 08:00
+    schedule.every().day.at("21:00").do(trade_strategy)  # UTC 12:00
     
     logging.info("자동매매 스크립트 시작")
-    logging.info("실행 시간 (UTC): 00:00, 04:00, 08:00, 12:00, 16:00, 20:00")
-    logging.info(f"상태 저장 파일: {STATUS_FILE}")
+    logging.info("실행 시간 (KST): 01:00, 05:00, 09:00, 13:00, 17:00, 21:00")
+    logging.info("바이낸스 4H 캔들 시작 (UTC): 16:00, 20:00, 00:00, 04:00, 08:00, 12:00")
     
     # 시작 시 즉시 실행
     logging.info("🚀 시작 시 전략 즉시 실행...")
