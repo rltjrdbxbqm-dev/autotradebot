@@ -1,16 +1,16 @@
 """
 ================================================================================
-업비트 자동매매 봇 v2.2.6 (API 에러 처리 강화)
+업비트 자동매매 봇 v2.2.7 (서버 점검 시 자동 복구)
 ================================================================================
 수정 내역:
-1. [v2.2.6] API 에러 처리 강화:
-   - retry_api_call() 래퍼 함수 추가 (재시도 로직)
-   - get_krw_balance(): None 반환 시 처리 추가
-   - get_total_asset(): 타임아웃/에러 시 재시도 로직 추가
-   - get_holdings_info(): 동일하게 재시도 로직 추가
-2. [v2.2.5] 진입 자산 규모 제한: min(가용KRW/빈슬롯, 총자산/코인개수)
-3. [v2.2.4] 매매 조건을 시가 기준에서 현재가 기준으로 변경
-4. 베이지안 최적화 파라미터 유지
+1. [v2.2.7] 서버 점검 시 자동 복구:
+   - 모든 API 호출에 30초 timeout 적용 (ThreadPoolExecutor 사용)
+   - API 실패 시 이번 사이클 스킵 후 다음 스케줄에 자동 재시도
+   - 서버 점검 중에도 봇이 멈추지 않고 계속 실행
+2. [v2.2.6] API 에러 처리 강화 (재시도 로직)
+3. [v2.2.5] 진입 자산 규모 제한: min(가용KRW/빈슬롯, 총자산/코인개수)
+4. [v2.2.4] 매매 조건을 시가 기준에서 현재가 기준으로 변경
+5. 베이지안 최적화 파라미터 유지
 ================================================================================
 """
 
@@ -257,10 +257,10 @@ def send_start_alert(status_loaded=False):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.6)</b>\n"
+    msg = f"🚀 <b>자동매매 봇 시작 (v2.2.7)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 전략: MA + 스토캐스틱 + 역방향\n"
-    msg += f"🛠️ 수정: API 에러 처리 강화\n"
+    msg += f"🛠️ 수정: 서버 점검 시 자동 복구\n"
     msg += f"🪙 대상: {len(COINS)}개 코인\n"
     if status_loaded:
         msg += f"📂 이전 상태: 복원됨\n"
@@ -355,18 +355,60 @@ upbit = Upbit(ACCESS_KEY, SECRET_KEY)
 
 
 # ============================================================
-# API 호출 재시도 래퍼
+# API 호출 재시도 래퍼 (Timeout 지원 - signal.alarm 방식)
 # ============================================================
 
-def retry_api_call(func, max_retries=3, delay=2.0, default=None):
+class APITimeoutError(Exception):
+    """API 호출 타임아웃 에러"""
+    pass
+
+
+def _timeout_handler(signum, frame):
+    """타임아웃 시그널 핸들러"""
+    raise APITimeoutError("API 호출 타임아웃")
+
+
+def call_with_timeout(func, timeout=30):
     """
-    API 호출 재시도 래퍼
+    함수를 timeout과 함께 실행 (signal.alarm 방식 - Linux 전용)
+    
+    Args:
+        func: 실행할 함수 (lambda로 전달)
+        timeout: 타임아웃 시간 (초)
+    
+    Returns:
+        함수 실행 결과 또는 None (타임아웃/에러 시)
+    """
+    # 기존 핸들러 저장
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout)
+    
+    try:
+        result = func()
+        signal.alarm(0)  # 타이머 취소
+        return result
+    except APITimeoutError:
+        logging.warning(f"API 호출 타임아웃 ({timeout}초)")
+        return None
+    except Exception as e:
+        signal.alarm(0)  # 타이머 취소
+        logging.warning(f"API 호출 중 오류: {e}")
+        return None
+    finally:
+        signal.alarm(0)  # 타이머 확실히 취소
+        signal.signal(signal.SIGALRM, old_handler)  # 핸들러 복원
+
+
+def retry_api_call(func, max_retries=3, delay=2.0, default=None, timeout=30):
+    """
+    API 호출 재시도 래퍼 (Timeout 지원)
     
     Args:
         func: 실행할 함수 (lambda로 전달)
         max_retries: 최대 재시도 횟수
         delay: 재시도 간 대기 시간 (초)
         default: 모든 재시도 실패 시 반환할 기본값
+        timeout: 각 시도당 타임아웃 (초)
     
     Returns:
         API 호출 결과 또는 default 값
@@ -374,7 +416,7 @@ def retry_api_call(func, max_retries=3, delay=2.0, default=None):
     last_error = None
     for attempt in range(max_retries):
         try:
-            result = func()
+            result = call_with_timeout(func, timeout=timeout)
             if result is not None:
                 return result
             # None이 반환된 경우도 재시도
@@ -388,6 +430,8 @@ def retry_api_call(func, max_retries=3, delay=2.0, default=None):
     
     if last_error:
         logging.error(f"API 호출 최종 실패: {last_error}")
+    else:
+        logging.error(f"API 호출 최종 실패: 모든 재시도에서 None 반환")
     return default
 
 
@@ -694,6 +738,7 @@ def get_total_asset():
     """총 자산 계산 (재시도 및 개별 에러 처리 포함)"""
     try:
         # 잔고 조회 (재시도 포함)
+        logging.debug("총 자산 계산: 잔고 조회 시작...")
         balances = retry_api_call(
             lambda: upbit.get_balances(),
             max_retries=3,
@@ -705,9 +750,10 @@ def get_total_asset():
             logging.error("잔고 조회 실패: API가 None을 반환했습니다.")
             return 0
         
+        logging.debug(f"총 자산 계산: 잔고 {len(balances)}개 항목 조회됨")
         total_asset = 0.0
         
-        for balance in balances:
+        for idx, balance in enumerate(balances):
             try:
                 if balance['currency'] != 'KRW':
                     ticker = f"KRW-{balance['currency']}"
@@ -726,6 +772,7 @@ def get_total_asset():
                 logging.warning(f"개별 잔고 처리 중 오류: {balance.get('currency', 'unknown')} - {e}")
                 continue
 
+        logging.debug(f"총 자산 계산 완료: {total_asset:,.0f}")
         return total_asset
     except Exception as e:
         logging.error(f"총 자산 계산 중 오류 발생: {e}")
@@ -831,14 +878,17 @@ def calculate_invest_amount():
 # ============================================================
 
 def get_current_price(ticker):
-    """현재가 조회"""
+    """현재가 조회 (timeout 포함)"""
     try:
         url = f"https://api.upbit.com/v1/ticker?markets={ticker}"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         if data and 'trade_price' in data[0]:
             return float(data[0]['trade_price'])
+        return None
+    except requests.exceptions.Timeout:
+        logging.warning(f"{ticker} 현재가 조회 타임아웃")
         return None
     except Exception as e:
         logging.error(f"{ticker} 현재가 조회 중 오류 발생: {e}")
@@ -846,14 +896,17 @@ def get_current_price(ticker):
 
 
 def get_opening_price_4h(ticker):
-    """4시간봉 현재 캔들의 시가 조회"""
+    """4시간봉 현재 캔들의 시가 조회 (timeout 포함)"""
     try:
         url = f"https://api.upbit.com/v1/candles/minutes/240?market={ticker}&count=1"
-        response = requests.get(url)
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
         if data:
             return float(data[0]['opening_price'])
+        return None
+    except requests.exceptions.Timeout:
+        logging.warning(f"{ticker} 4H 시가 조회 타임아웃")
         return None
     except Exception as e:
         logging.error(f"{ticker} 4H 시가 조회 중 오류 발생: {e}")
@@ -861,13 +914,19 @@ def get_opening_price_4h(ticker):
 
 
 def get_hourly_ma(ticker, period):
-    """4시간봉 이동평균 계산 (pyupbit 사용으로 200개 제한 해결)"""
+    """4시간봉 이동평균 계산 (pyupbit 사용으로 200개 제한 해결, timeout 포함)"""
     try:
         # pyupbit는 count가 200을 넘으면 자동으로 분할 요청하여 합쳐줍니다.
         # interval="minute240"은 4시간봉을 의미합니다.
-        df = pyupbit.get_ohlcv(ticker, interval="minute240", count=period)
+        logging.debug(f"{ticker} MA{period} 조회 중...")
         
-        if df is not None:
+        # timeout wrapper 적용
+        df = call_with_timeout(
+            lambda: pyupbit.get_ohlcv(ticker, interval="minute240", count=period),
+            timeout=30
+        )
+        
+        if df is not None and not df.empty:
             # trade_price는 종가(close)를 의미합니다.
             return float(df['close'].mean())
         return None
@@ -877,12 +936,16 @@ def get_hourly_ma(ticker, period):
 
 
 def get_daily_ohlcv(ticker, count):
-    """1일봉 OHLCV 데이터 조회 (pyupbit 사용으로 200개 제한 해결)"""
+    """1일봉 OHLCV 데이터 조회 (pyupbit 사용으로 200개 제한 해결, timeout 포함)"""
     try:
         # pyupbit.get_ohlcv는 count가 200을 넘으면 자동으로 반복 요청을 처리해줍니다.
-        df = pyupbit.get_ohlcv(ticker, interval="day", count=count)
+        # timeout wrapper 적용
+        df = call_with_timeout(
+            lambda: pyupbit.get_ohlcv(ticker, interval="day", count=count),
+            timeout=30
+        )
         
-        if df is not None:
+        if df is not None and not df.empty:
             return df
         return None
     except Exception as e:
@@ -1079,8 +1142,20 @@ def check_reverse_strategy(ticker, current_price, ma_price):
 def trade_strategy():
     """거래 전략 실행 (종합 메시지 전송)"""
     try:
+        logging.info("📡 KRW 잔고 조회 중...")
         krw_balance = get_krw_balance()
+        logging.info(f"📡 KRW 잔고 조회 완료: {krw_balance:,.0f} KRW")
+        
+        logging.info("📡 총 자산 계산 중...")
         total_asset = get_total_asset()
+        logging.info(f"📡 총 자산 계산 완료: {total_asset:,.0f} KRW")
+        
+        # API 실패 시 (서버 점검 등) 이번 사이클 스킵
+        if krw_balance == 0 and total_asset == 0:
+            logging.warning("⚠️ API 조회 실패 (서버 점검 가능성). 이번 사이클을 건너뜁니다.")
+            logging.warning("⏰ 다음 스케줄 시간에 자동으로 재시도합니다.")
+            send_telegram("⚠️ <b>업비트 API 조회 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
+            return
         
         logging.info("=" * 80)
         logging.info(f"📊 거래 전략 실행 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1115,7 +1190,12 @@ def trade_strategy():
                 continue
             
             coin_currency = ticker.split('-')[1]
-            current_balance = upbit.get_balance(coin_currency)
+            current_balance = call_with_timeout(
+                lambda c=coin_currency: upbit.get_balance(c),
+                timeout=10
+            )
+            if current_balance is None:
+                current_balance = 0
             
             reverse_signal, is_reverse_holding, error_rate = check_reverse_strategy(
                 ticker, current_price, ma_price
@@ -1265,7 +1345,7 @@ def send_daily_report():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 업비트 자동매매 봇 v2.2.6 (API 에러 처리 강화)")
+    logging.info("🤖 업비트 자동매매 봇 v2.2.7 (서버 점검 시 자동 복구)")
     logging.info("=" * 80)
     logging.info("📦 개선 사항:")
     logging.info("   1. [NEW] 진입 자산: min(가용KRW/빈슬롯, 총자산/코인개수)")
