@@ -1,12 +1,13 @@
 """
 ================================================================================
-바이낸스 자동매매 봇 v1.1.0 (파인튜닝 파라미터 적용)
+바이낸스 자동매매 봇 v1.2.0 (서버 점검 시 자동 복구)
 ================================================================================
 - MA + 스토캐스틱 + 역방향 전략
 - 파인튜닝된 135개 코인 대상 (BNB 제외)
 - BNB 자동 충전 기능 (수수료 할인용)
 - 수수료: 0.075% (BNB 할인 적용)
 - 4시간봉 기준 매매 (UTC 00:00, 04:00, 08:00, 12:00, 16:00, 20:00)
+- [v1.2.0] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
 ================================================================================
 """
 
@@ -451,6 +452,67 @@ stoch_cache_date = None
 exchange = None
 
 # ============================================================
+# API 호출 Timeout Wrapper (signal.alarm 방식)
+# ============================================================
+
+class APITimeoutError(Exception):
+    """API 호출 타임아웃 에러"""
+    pass
+
+
+def _timeout_handler(signum, frame):
+    """타임아웃 시그널 핸들러"""
+    raise APITimeoutError("API 호출 타임아웃")
+
+
+def call_with_timeout(func, timeout=30):
+    """
+    함수를 timeout과 함께 실행 (signal.alarm 방식 - Linux 전용)
+    
+    Args:
+        func: 실행할 함수 (lambda로 전달)
+        timeout: 타임아웃 시간 (초)
+    
+    Returns:
+        함수 실행 결과 또는 None (타임아웃/에러 시)
+    """
+    # 기존 핸들러 저장
+    old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(timeout)
+    
+    try:
+        result = func()
+        signal.alarm(0)  # 타이머 취소
+        return result
+    except APITimeoutError:
+        logging.warning(f"API 호출 타임아웃 ({timeout}초)")
+        return None
+    except Exception as e:
+        signal.alarm(0)  # 타이머 취소
+        logging.warning(f"API 호출 중 오류: {e}")
+        return None
+    finally:
+        signal.alarm(0)  # 타이머 확실히 취소
+        signal.signal(signal.SIGALRM, old_handler)  # 핸들러 복원
+
+
+def retry_api_call(func, max_retries=3, delay=2.0, default=None, timeout=30):
+    """
+    API 호출 재시도 래퍼 (Timeout 지원)
+    """
+    for attempt in range(max_retries):
+        result = call_with_timeout(func, timeout=timeout)
+        if result is not None:
+            return result
+        logging.warning(f"API 호출 결과가 None입니다. 재시도 {attempt + 1}/{max_retries}")
+        if attempt < max_retries - 1:
+            time.sleep(delay)
+    
+    logging.error(f"API 호출 최종 실패: 모든 재시도에서 None 반환")
+    return default
+
+
+# ============================================================
 # 거래소 초기화
 # ============================================================
 
@@ -543,12 +605,13 @@ def send_start_alert(status_loaded=False):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>바이낸스 자동매매 봇 시작 (v1.1.0)</b>\n"
+    msg = f"🚀 <b>바이낸스 자동매매 봇 시작 (v1.2.0)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 전략: MA + 스토캐스틱 + 역방향\n"
     msg += f"💰 수수료: 0.075% (BNB 할인)\n"
     msg += f"🔶 BNB 자동충전: ${BNB_MIN_BALANCE} 이하시 ${BNB_RECHARGE_AMOUNT} 충전\n"
     msg += f"🪙 대상: {len(COINS)}개 코인 (파인튜닝)\n"
+    msg += f"🛠️ 서버 점검 시 자동 복구\n"
     if status_loaded:
         msg += f"📂 이전 상태: 복원됨\n"
     msg += f"━━━━━━━━━━━━━━━\n"
@@ -1123,11 +1186,33 @@ def check_reverse_strategy(symbol, current_price, ma_price):
 
 def trade_strategy():
     """거래 전략 실행"""
+    global exchange
+    
     buy_list = []
     sell_list = []
     errors = []
     
     try:
+        # exchange가 None이면 재초기화 시도
+        if exchange is None:
+            logging.info("📡 거래소 재초기화 시도...")
+            if not init_exchange():
+                logging.warning("⚠️ 거래소 초기화 실패. 이번 사이클을 건너뜁니다.")
+                send_telegram("⚠️ <b>바이낸스 거래소 초기화 실패</b>\n다음 스케줄 시간에 자동 재시도합니다.")
+                return
+        
+        # API 연결 상태 확인 (서버 점검 체크)
+        logging.info("📡 API 연결 상태 확인 중...")
+        test_balance = call_with_timeout(lambda: exchange.fetch_balance(), timeout=30)
+        
+        if test_balance is None:
+            logging.warning("⚠️ API 조회 실패 (서버 점검 가능성). 이번 사이클을 건너뜁니다.")
+            logging.warning("⏰ 다음 스케줄 시간에 자동으로 재시도합니다.")
+            send_telegram("⚠️ <b>바이낸스 API 조회 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
+            return
+        
+        logging.info("✅ API 연결 정상")
+        
         # BNB 자동 충전 먼저 확인
         bnb_result = check_and_recharge_bnb()
         if bnb_result and bnb_result.get('action') == 'recharged':
@@ -1136,6 +1221,12 @@ def trade_strategy():
         usdt_balance = get_usdt_balance()
         total_asset = get_total_asset()
         bnb_info = get_bnb_balance()
+        
+        # 자산 조회 실패 시 스킵
+        if usdt_balance == 0 and total_asset == 0:
+            logging.warning("⚠️ 자산 조회 실패. 이번 사이클을 건너뜁니다.")
+            send_telegram("⚠️ <b>자산 조회 실패</b>\n다음 스케줄 시간에 자동 재시도합니다.")
+            return
         
         logging.info("=" * 80)
         logging.info(f"📊 거래 전략 실행 시작 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -1270,7 +1361,7 @@ def trade_strategy():
 def log_strategy_info():
     """전략 정보 로깅"""
     logging.info("=" * 80)
-    logging.info("🤖 바이낸스 자동매매 봇 v1.1.0 (파인튜닝 파라미터)")
+    logging.info("🤖 바이낸스 자동매매 봇 v1.2.0 (서버 점검 시 자동 복구)")
     logging.info("=" * 80)
     logging.info("📈 상승 전략:")
     logging.info("   - 조건1: 현재가 > MA (4H봉 기준)")
@@ -1283,6 +1374,7 @@ def log_strategy_info():
     logging.info(f"🪙 거래 대상: {len(COINS)}개 코인")
     logging.info(f"💰 수수료: {FEE_RATE * 100:.3f}%")
     logging.info(f"🔶 BNB 자동충전: ${BNB_MIN_BALANCE} 이하시 ${BNB_RECHARGE_AMOUNT} 매수")
+    logging.info(f"🛠️ 서버 점검 시 자동 복구 기능 적용")
     logging.info("=" * 80)
 
 
@@ -1295,10 +1387,10 @@ def main():
     # 종료 핸들러 설정
     setup_shutdown_handlers()
     
-    # 거래소 초기화
+    # 거래소 초기화 (실패해도 계속 진행 - 다음 스케줄에서 재시도)
     if not init_exchange():
-        logging.error("거래소 초기화 실패. 프로그램 종료.")
-        return
+        logging.warning("⚠️ 거래소 초기화 실패. 다음 스케줄에서 재시도합니다.")
+        send_telegram("⚠️ <b>바이낸스 거래소 초기화 실패</b>\n서버 점검 가능성이 있습니다.\n다음 스케줄 시간에 자동 재시도합니다.")
     
     # 상태 초기화 및 로드
     initialize_status()
@@ -1329,9 +1421,13 @@ def main():
     logging.info("자동매매 스크립트 시작")
     logging.info("실행 시간 (KST): 01:00, 05:00, 09:00, 13:00, 17:00, 21:00")
     logging.info("바이낸스 4H 캔들 시작 (UTC): 16:00, 20:00, 00:00, 04:00, 08:00, 12:00")    
-    # 시작 시 즉시 실행
-    logging.info("🚀 시작 시 전략 즉시 실행...")
-    trade_strategy()
+    
+    # 시작 시 즉시 실행 (거래소 초기화 성공 시에만)
+    if exchange is not None:
+        logging.info("🚀 시작 시 전략 즉시 실행...")
+        trade_strategy()
+    else:
+        logging.warning("⚠️ 거래소 미초기화. 다음 스케줄에서 실행합니다.")
     
     while True:
         schedule.run_pending()
