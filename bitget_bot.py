@@ -776,14 +776,44 @@ class BitgetClient:
         return data
     
     def cancel_all_orders(self, symbol: str, product_type: str = 'USDT-FUTURES', margin_coin: str = 'USDT') -> bool:
-        result = self._request('POST', "/api/v2/mix/order/cancel-all-orders", body={
-            'symbol': symbol,
-            'productType': product_type,
-            'marginCoin': margin_coin
-        })
-        if result is not None:
-            logger.debug(f"[{symbol}] 미체결 주문 취소 완료")
-        return True
+        """미체결 주문 전체 취소 (취소할 주문이 없어도 정상 처리)"""
+        try:
+            timestamp = int(time.time() * 1000)
+            method = 'POST'
+            path = "/api/v2/mix/order/cancel-all-orders"
+            body = {
+                'symbol': symbol,
+                'productType': product_type,
+                'marginCoin': margin_coin
+            }
+            body_str = json.dumps(body)
+            sign = self._get_sign(timestamp, method, path, body_str)
+            
+            headers = {
+                'ACCESS-KEY': self.api_key,
+                'ACCESS-SIGN': sign,
+                'ACCESS-TIMESTAMP': str(timestamp),
+                'ACCESS-PASSPHRASE': self.passphrase,
+                'Content-Type': 'application/json',
+                'locale': 'en-US'
+            }
+            
+            resp = requests.post(f"{BASE_URL}{path}", headers=headers, data=body_str, timeout=10)
+            data = resp.json()
+            
+            # '22001' (No order to cancel)은 정상 케이스로 처리
+            if data.get('code') == '00000':
+                logger.debug(f"[{symbol}] 미체결 주문 취소 완료")
+                return True
+            elif data.get('code') == '22001':
+                logger.debug(f"[{symbol}] 취소할 주문 없음 (정상)")
+                return True
+            else:
+                logger.error(f"[{symbol}] 주문 취소 실패: {data}")
+                return False
+        except Exception as e:
+            logger.error(f"[{symbol}] 주문 취소 예외: {e}")
+            return False
     
     def get_order(self, symbol: str, order_id: str, product_type: str = 'USDT-FUTURES') -> Dict:
         return self._request('GET', "/api/v2/mix/order/detail", {
