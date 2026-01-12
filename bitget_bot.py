@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.9 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.10 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -14,6 +14,7 @@ Bitget Futures 자동매매 봇 v3.9 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트 전송
 - [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
 - [v3.9] 다수진입전략: 3개+ 포지션 보유 시 새 진입에서 Stoch 무시 → leverage_up
+- [v3.10] 다수보유전략: 3개+ 보유 시 Stoch 청산도 무시 → MA로만 청산 (휩쏘 방지)
 ================================================================================
 """
 
@@ -1671,10 +1672,20 @@ class TradingBot:
                 add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
         elif action == 'CASH':
             if has_pos:
-                is_bull, _, _ = self.get_stochastic_signal()
-                reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
-                logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
-                self.safe_limit_close(reason=reason)
+                # ═══════════════════════════════════════════════════════════════════════
+                # [v3.10] 다수보유전략: 3개 이상 보유 시 스토캐스틱 청산 무시 (MA로만 청산)
+                # ═══════════════════════════════════════════════════════════════════════
+                ma_signal = self.get_ma_signal()
+                if ma_signal == 1 and active_count >= 3:
+                    # MA는 위인데 스토캐스틱 하락장 → 다수보유 중이므로 청산하지 않고 유지
+                    logger.info(f"[{self.symbol}] 🔥 다수보유전략: {active_count}개 보유 중 → Stoch 청산 무시, 유지")
+                    add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
+                else:
+                    # MA 하락 또는 2개 이하 보유 → 정상 청산
+                    is_bull, _, _ = self.get_stochastic_signal()
+                    reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
+                    logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
+                    self.safe_limit_close(reason=reason)
             else:
                 logger.info(f"[{self.symbol}] ➡️ 현금 유지")
 
@@ -1712,12 +1723,13 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.9 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("📊 Bitget 자동매매 봇 v3.10 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
     print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
     print("   [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트")
     print("   [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄 재시도")
-    print("   [v3.9] 다수진입전략: 3개+ 보유 시 Stoch 무시 → leverage_up")
+    print("   [v3.9] 다수진입전략: 3개+ 보유 시 신규진입 Stoch 무시")
+    print("   [v3.10] 다수보유전략: 3개+ 보유 시 청산도 Stoch 무시 (MA로만)")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
