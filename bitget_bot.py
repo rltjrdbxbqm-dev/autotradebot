@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.10 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -13,8 +13,6 @@ Bitget Futures 자동매매 봇 v3.10 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.6] 진입 자산 규모 제한: 기존 방식 vs 총자산×allocation_pct 중 작은 값 사용
 - [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트 전송
 - [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
-- [v3.9] 다수진입전략: 3개+ 포지션 보유 시 새 진입에서 Stoch 무시 → leverage_up
-- [v3.10] 다수보유전략: 3개+ 보유 시 Stoch 청산도 무시 → MA로만 청산 (휩쏘 방지)
 ================================================================================
 """
 
@@ -930,14 +928,6 @@ class PortfolioManager:
         status = self.get_position_status()
         return sum(1 for has_pos in status.values() if not has_pos)
     
-    def get_active_position_count(self) -> int:
-        """
-        [다수진입전략] 현재 포지션이 있는 코인 수 반환
-        Returns: 포지션이 있는 코인 수 (0~4)
-        """
-        status = self.get_position_status()
-        return sum(1 for has_pos in status.values() if has_pos)
-    
     def calculate_invest_amount_for_symbol(self, symbol: str) -> float:
         """
         [v3.4 핵심 개선] allocation_pct를 반영한 개별 코인 투자금액 계산
@@ -1629,40 +1619,15 @@ class TradingBot:
         pos = self.get_current_position()
         has_pos = pos['side'] == 'long' and pos['size'] > 0
         curr_lev = pos.get('leverage', 0)
-        
-        # ═══════════════════════════════════════════════════════════════════════
-        # [다수진입전략] 3개 이상 포지션 보유 시 새 진입에서 스토캐스틱 무시 → leverage_up
-        # ═══════════════════════════════════════════════════════════════════════
-        active_count = self.portfolio.get_active_position_count()
-        multi_entry_applied = False
-        
-        if not has_pos and action == 'LONG' and active_count >= 3:
-            # MA는 LONG인데 스토캐스틱이 하락장이라 target_lev가 0인 경우
-            if target_lev == 0 or target_lev < self.leverage_up:
-                old_lev = target_lev
-                target_lev = self.leverage_up
-                multi_entry_applied = True
-                logger.info(f"[{self.symbol}] 🔥 다수진입전략 적용: {active_count}개 보유 중 → Stoch 무시, Lev {old_lev}x→{target_lev}x")
-        
-        # MA가 LONG이지만 스토캐스틱으로 인해 CASH가 된 경우도 처리
-        if not has_pos and action == 'CASH' and active_count >= 3:
-            # MA 신호 재확인
-            ma_signal = self.get_ma_signal()
-            if ma_signal == 1:  # MA는 LONG인데 스토캐스틱 때문에 CASH가 된 경우
-                action = 'LONG'
-                target_lev = self.leverage_up
-                multi_entry_applied = True
-                logger.info(f"[{self.symbol}] 🔥 다수진입전략 적용: {active_count}개 보유 중 → Stoch 무시, CASH→LONG {target_lev}x")
-        
         if has_pos:
             logger.info(f"[{self.symbol}] 📍 현재: Long {pos['size']} @ {curr_lev}x, PnL: {pos['unrealized_pnl']:+.2f}")
         else:
-            logger.info(f"[{self.symbol}] 📍 현재: 현금 (활성 포지션: {active_count}개)")
+            logger.info(f"[{self.symbol}] 📍 현재: 현금")
         lev_desc = f"{target_lev}x" if target_lev > 0 else "현금"
-        logger.info(f"[{self.symbol}] 🎯 목표: {action} ({lev_desc})" + (" [다수진입]" if multi_entry_applied else ""))
+        logger.info(f"[{self.symbol}] 🎯 목표: {action} ({lev_desc})")
         if action == 'LONG':
             if not has_pos:
-                logger.info(f"[{self.symbol}] 📈 Long 진입 (Lev {target_lev}x)" + (" [다수진입전략]" if multi_entry_applied else ""))
+                logger.info(f"[{self.symbol}] 📈 Long 진입 (Lev {target_lev}x)")
                 self.safe_limit_entry(target_lev)
             elif curr_lev != target_lev:
                 self.adjust_leverage(target_lev)
@@ -1672,20 +1637,10 @@ class TradingBot:
                 add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
         elif action == 'CASH':
             if has_pos:
-                # ═══════════════════════════════════════════════════════════════════════
-                # [v3.10] 다수보유전략: 3개 이상 보유 시 스토캐스틱 청산 무시 (MA로만 청산)
-                # ═══════════════════════════════════════════════════════════════════════
-                ma_signal = self.get_ma_signal()
-                if ma_signal == 1 and active_count >= 3:
-                    # MA는 위인데 스토캐스틱 하락장 → 다수보유 중이므로 청산하지 않고 유지
-                    logger.info(f"[{self.symbol}] 🔥 다수보유전략: {active_count}개 보유 중 → Stoch 청산 무시, 유지")
-                    add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
-                else:
-                    # MA 하락 또는 2개 이하 보유 → 정상 청산
-                    is_bull, _, _ = self.get_stochastic_signal()
-                    reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
-                    logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
-                    self.safe_limit_close(reason=reason)
+                is_bull, _, _ = self.get_stochastic_signal()
+                reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
+                logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
+                self.safe_limit_close(reason=reason)
             else:
                 logger.info(f"[{self.symbol}] ➡️ 현금 유지")
 
@@ -1723,13 +1678,11 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.10 (Binance 신호 + Bitget 매매) + 텔레그램")
+    print("📊 Bitget 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램")
     print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
     print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
     print("   [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트")
     print("   [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄 재시도")
-    print("   [v3.9] 다수진입전략: 3개+ 보유 시 신규진입 Stoch 무시")
-    print("   [v3.10] 다수보유전략: 3개+ 보유 시 청산도 Stoch 무시 (MA로만)")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
