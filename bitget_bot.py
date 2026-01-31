@@ -1,6 +1,6 @@
 """
 ================================================================================
-Bitget Futures 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램 알림
+Bitget Futures 자동매매 봇 v4.0 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 신호 데이터: Binance 공개 API (API 키 불필요)
 - 매매 실행: Bitget API (헤지 모드)
@@ -13,6 +13,10 @@ Bitget Futures 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레�
 - [v3.6] 진입 자산 규모 제한: 기존 방식 vs 총자산×allocation_pct 중 작은 값 사용
 - [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트 전송
 - [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
+- [v4.0] 롱/숏 통합: 롱 조건 우선, 숏 조건 차선 (별도 파라미터)
+  - 롱 조건: 가격 > MA AND K > D → leverage_up 배율로 롱 진입
+  - 숏 조건: 가격 < MA AND K < D → 숏 레버리지로 숏 진입 (롱 미충족 시)
+  - 충돌 시 롱 우선
 ================================================================================
 """
 
@@ -124,6 +128,58 @@ TRADING_CONFIGS = [
         'description': 'SUI MA140 + Stoch(90,40,5) Lev 3x/Cash'
     },
 ]
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 📌 [v4.0] 숏 포지션 트레이딩 설정 (백테스트 결과 기반)
+# ═══════════════════════════════════════════════════════════════════════════════
+# 숏 조건: 가격 < MA AND K < D (롱 조건 미충족 시에만 적용)
+# 숏 파라미터는 롱과 별도로 최적화된 값 사용
+
+SHORT_TRADING_CONFIGS = [
+    {
+        'enabled': True,
+        'symbol': 'BTCUSDT',
+        'ma_period': 248,
+        'stoch_k_period': 24,
+        'stoch_k_smooth': 20,
+        'stoch_d_period': 28,
+        'leverage': 1,
+        # CAGR: 11.0%, MDD: -36.4%, Sharpe: 0.42
+    },
+    {
+        'enabled': True,
+        'symbol': 'ETHUSDT',
+        'ma_period': 227,
+        'stoch_k_period': 32,
+        'stoch_k_smooth': 43,
+        'stoch_d_period': 26,
+        'leverage': 1,
+        # CAGR: 28.1%, MDD: -34.7%, Sharpe: 0.70
+    },
+    {
+        'enabled': True,
+        'symbol': 'SOLUSDT',
+        'ma_period': 64,
+        'stoch_k_period': 132,
+        'stoch_k_smooth': 25,
+        'stoch_d_period': 34,
+        'leverage': 1,
+        # CAGR: 33.7%, MDD: -34.2%, Sharpe: 0.69
+    },
+    {
+        'enabled': True,
+        'symbol': 'SUIUSDT',
+        'ma_period': 308,
+        'stoch_k_period': 162,
+        'stoch_k_smooth': 68,
+        'stoch_d_period': 50,
+        'leverage': 1,
+        # CAGR: 101.5%, MDD: -19.1%, Sharpe: 1.59
+    },
+]
+
+# 숏 설정을 심볼로 빠르게 찾기 위한 딕셔너리
+SHORT_CONFIG_BY_SYMBOL = {c['symbol']: c for c in SHORT_TRADING_CONFIGS if c['enabled']}
 
 # 주문 설정
 LIMIT_ORDER_TICKS = 1
@@ -284,14 +340,15 @@ def clear_trade_results():
     }
 
 
-def add_hold_position(symbol: str, size: float, leverage: int, pnl: float):
+def add_hold_position(symbol: str, size: float, leverage: int, pnl: float, side: str = 'long'):
     """보유 유지 포지션 추가"""
     global trade_results
     trade_results['holds'].append({
         'symbol': symbol,
         'size': size,
         'leverage': leverage,
-        'pnl': pnl
+        'pnl': pnl,
+        'side': side
     })
 
 
@@ -356,7 +413,8 @@ def send_trading_summary(total_equity: float, available: float):
             pnl = hold['pnl']
             pnl_emoji = "🟢" if pnl >= 0 else "🔴"
             pnl_sign = "+" if pnl >= 0 else ""
-            msg += f"  {pnl_emoji} {hold['symbol']}: {hold['leverage']}x ({pnl_sign}{pnl:,.2f})\n"
+            side_str = "L" if hold.get('side', 'long') == 'long' else "S"
+            msg += f"  {pnl_emoji} {hold['symbol']}: {side_str} {hold['leverage']}x ({pnl_sign}{pnl:,.2f})\n"
         msg += f"━━━━━━━━━━━━━━━\n"
     
     # 에러 내역
@@ -395,7 +453,7 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     """봇 시작 알림"""
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
-    msg = f"🚀 <b>Bitget 선물봇 시작 v3.8</b>\n"
+    msg = f"🚀 <b>Bitget 선물봇 시작 v4.0</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📡 신호: Binance API\n"
     msg += f"💹 매매: Bitget API\n"
@@ -403,10 +461,16 @@ def send_bot_start_alert(configs: List[Dict], total_equity: float):
     msg += f"📊 활성 전략: {len(configs)}개\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     
+    msg += f"<b>📈 롱 전략:</b>\n"
     for c in configs:
         e_desc = "현금" if c['leverage_down'] == 0 else f"{c['leverage_down']}x"
         alloc = c.get('allocation_pct', 0)
         msg += f"• {c['symbol']}: {alloc:.0f}% / {c['leverage_up']}x/{e_desc}\n"
+    
+    msg += f"\n<b>📉 숏 전략:</b>\n"
+    for c in SHORT_TRADING_CONFIGS:
+        if c['enabled']:
+            msg += f"• {c['symbol']}: {c['leverage']}x\n"
     
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"🕐 {now}"
@@ -1091,6 +1155,17 @@ class TradingBot:
         self.description = config.get('description', self.symbol)
         
         # ═══════════════════════════════════════════════════════════════════════
+        # [v4.0] 숏 포지션 설정 (별도 파라미터)
+        # ═══════════════════════════════════════════════════════════════════════
+        short_config = SHORT_CONFIG_BY_SYMBOL.get(self.symbol, {})
+        self.short_enabled = short_config.get('enabled', False)
+        self.short_ma_period = short_config.get('ma_period', self.ma_period)
+        self.short_stoch_k_period = short_config.get('stoch_k_period', self.stoch_k_period)
+        self.short_stoch_k_smooth = short_config.get('stoch_k_smooth', self.stoch_k_smooth)
+        self.short_stoch_d_period = short_config.get('stoch_d_period', self.stoch_d_period)
+        self.short_leverage = short_config.get('leverage', 1)
+        
+        # ═══════════════════════════════════════════════════════════════════════
         # [v3.5] 스토캐스틱 캐시 - 일봉 시작 시점(UTC 00:00 = KST 09:00) 기준
         # ═══════════════════════════════════════════════════════════════════════
         self._stoch_cache = {
@@ -1098,6 +1173,14 @@ class TradingBot:
             'is_bull': False,      # K > D 여부
             'k': 0.0,              # K 값
             'd': 0.0               # D 값
+        }
+        
+        # [v4.0] 숏용 스토캐스틱 캐시
+        self._stoch_cache_short = {
+            'utc_date': None,
+            'is_bear': False,      # K < D 여부
+            'k': 0.0,
+            'd': 0.0
         }
     
     def round_price(self, price: float) -> float:
@@ -1114,20 +1197,32 @@ class TradingBot:
         return f"{size:.{self.size_decimals}f}"
     
     def get_current_position(self) -> Dict:
+        """[v4.0] 현재 포지션 조회 (롱/숏 모두)"""
         positions = self.client.get_position(self.symbol, self.product_type, self.margin_coin)
+        result = {
+            'long': None,
+            'short': None
+        }
+        
         if not positions:
-            return {'side': None, 'size': 0, 'unrealized_pnl': 0, 'leverage': 0}
+            return result
+        
         for p in positions:
             total = float(p.get('total', 0))
-            if p.get('holdSide') == 'long' and total > 0:
-                return {
-                    'side': 'long',
+            if total > 0:
+                pos_info = {
+                    'side': p.get('holdSide'),
                     'size': total,
                     'avg_price': float(p.get('averageOpenPrice', 0)),
                     'unrealized_pnl': float(p.get('unrealizedPL', 0)),
                     'leverage': int(p.get('leverage', 0))
                 }
-        return {'side': None, 'size': 0, 'unrealized_pnl': 0, 'leverage': 0}
+                if p.get('holdSide') == 'long':
+                    result['long'] = pos_info
+                elif p.get('holdSide') == 'short':
+                    result['short'] = pos_info
+        
+        return result
     
     def wait_for_fill(self, order_id: str, timeout: int = ORDER_WAIT_SECONDS) -> Tuple[str, float]:
         start = time.time()
@@ -1210,11 +1305,12 @@ class TradingBot:
     # 안전한 진입/청산 (텔레그램 알림 포함)
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def safe_limit_entry(self, leverage: int) -> bool:
+    def safe_limit_entry(self, leverage: int, side: str = 'long') -> bool:
+        """[v4.0] 포지션 진입 (롱/숏 지원)"""
         if leverage <= 0:
             return False
         
-        self.client.set_leverage(self.symbol, leverage, self.product_type, self.margin_coin, 'long')
+        self.client.set_leverage(self.symbol, leverage, self.product_type, self.margin_coin, side)
         
         ticker = self.signal_client.get_ticker(self.symbol)
         if not ticker:
@@ -1236,8 +1332,12 @@ class TradingBot:
         remaining_size = target_size_float
         total_filled = 0.0
         
+        # 롱: buy, 숏: sell
+        order_side = 'buy' if side == 'long' else 'sell'
+        side_label = 'Long' if side == 'long' else 'Short'
+        
         if DRY_RUN:
-            logger.info(f"[{self.symbol}] [DRY RUN] Long 진입: {target_size}")
+            logger.info(f"[{self.symbol}] [DRY RUN] {side_label} 진입: {target_size}")
             return True
         
         entry_price_for_alert = price
@@ -1256,15 +1356,19 @@ class TradingBot:
                 continue
             
             price = float(ticker.get('lastPr', 0))
-            entry_price = self.round_price(price + self.tick_size * LIMIT_ORDER_TICKS)
+            # 롱: 약간 높게, 숏: 약간 낮게
+            if side == 'long':
+                entry_price = self.round_price(price + self.tick_size * LIMIT_ORDER_TICKS)
+            else:
+                entry_price = self.round_price(price - self.tick_size * LIMIT_ORDER_TICKS)
             entry_price_for_alert = entry_price
             
             remaining_str = self.format_size(remaining_size)
-            logger.info(f"[{self.symbol}] 📤 지정가 매수 #{retry}: {remaining_str} @ {self.format_price(entry_price)}")
+            logger.info(f"[{self.symbol}] 📤 지정가 {side_label} #{retry}: {remaining_str} @ {self.format_price(entry_price)}")
             
             result = self.client.place_limit_order(
-                self.symbol, 'buy', remaining_str, self.format_price(entry_price),
-                'open', 'long', self.product_type, self.margin_coin
+                self.symbol, order_side, remaining_str, self.format_price(entry_price),
+                'open', side, self.product_type, self.margin_coin
             )
             
             if not result:
@@ -1283,8 +1387,8 @@ class TradingBot:
             remaining_size = target_size_float - total_filled
             
             if status == 'filled':
-                logger.info(f"[{self.symbol}] ✅ Long 진입 완료: {self.format_size(total_filled)}")
-                send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                logger.info(f"[{self.symbol}] ✅ {side_label} 진입 완료: {self.format_size(total_filled)}")
+                send_entry_alert(self.symbol, side_label, self.format_size(total_filled), 
                                entry_price_for_alert, leverage, order_type_for_alert)
                 return True
             elif status == 'partially_filled':
@@ -1305,68 +1409,75 @@ class TradingBot:
                 self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
                 
                 result = self.client.place_market_order(
-                    self.symbol, 'buy', self.format_size(remaining_size),
-                    'open', 'long', self.product_type, self.margin_coin
+                    self.symbol, order_side, self.format_size(remaining_size),
+                    'open', side, self.product_type, self.margin_coin
                 )
                 
                 if result:
                     logger.info(f"[{self.symbol}] ✅ 시장가 진입 완료")
                     order_type_for_alert = "시장가"
-                    send_entry_alert(self.symbol, "Long", self.format_size(target_size_float), 
+                    send_entry_alert(self.symbol, side_label, self.format_size(target_size_float), 
                                    entry_price_for_alert, leverage, order_type_for_alert)
                     return True
                 else:
                     logger.error(f"[{self.symbol}] ❌ 시장가 진입 실패")
-                    send_error_alert(self.symbol, "시장가 진입 실패")
+                    send_error_alert(self.symbol, f"{side_label} 시장가 진입 실패")
                     if total_filled > 0:
-                        send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                        send_entry_alert(self.symbol, side_label, self.format_size(total_filled), 
                                        entry_price_for_alert, leverage, "부분체결")
                     return total_filled > 0
             else:
                 logger.info(f"[{self.symbol}] ✅ 잔여 물량 미달, 진입 완료: {self.format_size(total_filled)}")
-                send_entry_alert(self.symbol, "Long", self.format_size(total_filled), 
+                send_entry_alert(self.symbol, side_label, self.format_size(total_filled), 
                                entry_price_for_alert, leverage, order_type_for_alert)
                 return True
         
         return True
     
-    def safe_limit_close(self, reason: str = "") -> bool:
+    def safe_limit_close(self, side: str = 'long', reason: str = "") -> bool:
+        """[v4.0] 포지션 청산 (롱/숏 지원)"""
         # 포지션 조회 재시도 (Rate Limit 대비)
         pos = None
         for attempt in range(3):
-            pos = self.get_current_position()
-            if pos['side'] == 'long' and pos['size'] > 0:
+            all_pos = self.get_current_position()
+            pos = all_pos.get(side)
+            if pos and pos['size'] > 0:
                 break
-            elif pos['side'] is None and attempt < 2:
+            elif pos is None and attempt < 2:
                 logger.warning(f"[{self.symbol}] 포지션 조회 재시도 ({attempt + 1}/3)...")
                 time.sleep(2)
             else:
                 break
         
-        if pos['side'] != 'long' or pos['size'] <= 0:
-            logger.info(f"[{self.symbol}] 청산할 포지션 없음")
+        if not pos or pos['size'] <= 0:
+            logger.info(f"[{self.symbol}] 청산할 {side} 포지션 없음")
             return True
         
         entry_price = pos.get('avg_price', 0)
         position_size = pos['size']
         unrealized_pnl = pos.get('unrealized_pnl', 0)
         
+        # 롱 청산: sell, 숏 청산: buy
+        order_side = 'sell' if side == 'long' else 'buy'
+        side_label = 'Long' if side == 'long' else 'Short'
+        
         reason_str = f" ({reason})" if reason else ""
         
         if DRY_RUN:
-            logger.info(f"[{self.symbol}] [DRY RUN] Long 청산{reason_str}")
+            logger.info(f"[{self.symbol}] [DRY RUN] {side_label} 청산{reason_str}")
             return True
         
         for retry in range(1, MAX_LIMIT_RETRY + 1):
             # 현재 포지션 확인 (재시도 포함)
             for attempt in range(3):
-                pos = self.get_current_position()
+                all_pos = self.get_current_position()
+                pos = all_pos.get(side)
                 if pos is not None:
                     break
                 time.sleep(1)
             
-            if pos['side'] != 'long' or pos['size'] <= 0:
-                logger.info(f"[{self.symbol}] ✅ 청산 완료{reason_str}")
+            if not pos or pos['size'] <= 0:
+                logger.info(f"[{self.symbol}] ✅ {side_label} 청산 완료{reason_str}")
                 ticker = self.client.get_ticker(self.symbol, self.product_type)
                 exit_price = float(ticker.get('lastPr', 0)) if ticker else entry_price
                 send_close_alert(self.symbol, position_size, entry_price, exit_price, unrealized_pnl, reason)
@@ -1383,14 +1494,18 @@ class TradingBot:
                 continue
             
             price = float(ticker.get('lastPr', 0))
-            exit_price = self.round_price(price - self.tick_size * LIMIT_ORDER_TICKS)
+            # 롱 청산: 약간 낮게, 숏 청산: 약간 높게
+            if side == 'long':
+                exit_price = self.round_price(price - self.tick_size * LIMIT_ORDER_TICKS)
+            else:
+                exit_price = self.round_price(price + self.tick_size * LIMIT_ORDER_TICKS)
             
             remaining_str = self.format_size(remaining)
-            logger.info(f"[{self.symbol}] 📤 지정가 청산 #{retry}{reason_str}: {remaining_str} @ {self.format_price(exit_price)}")
+            logger.info(f"[{self.symbol}] 📤 지정가 {side_label} 청산 #{retry}{reason_str}: {remaining_str} @ {self.format_price(exit_price)}")
             
             result = self.client.place_limit_order(
-                self.symbol, 'sell', remaining_str, self.format_price(exit_price),
-                'close', 'long', self.product_type, self.margin_coin
+                self.symbol, order_side, remaining_str, self.format_price(exit_price),
+                'close', side, self.product_type, self.margin_coin
             )
             
             if not result:
@@ -1407,7 +1522,7 @@ class TradingBot:
             status, filled = self.wait_for_fill(order_id)
             
             if status == 'filled':
-                logger.info(f"[{self.symbol}] ✅ Long 청산 완료{reason_str}")
+                logger.info(f"[{self.symbol}] ✅ {side_label} 청산 완료{reason_str}")
                 send_close_alert(self.symbol, position_size, entry_price, exit_price, unrealized_pnl, reason)
                 return True
             elif status == 'partially_filled':
@@ -1422,7 +1537,7 @@ class TradingBot:
         logger.warning(f"[{self.symbol}] ⚠️ 지정가 {MAX_LIMIT_RETRY}회 실패, 플래시 청산...")
         self.client.cancel_all_orders(self.symbol, self.product_type, self.margin_coin)
         
-        result = self.client.flash_close_position(self.symbol, self.product_type, 'long')
+        result = self.client.flash_close_position(self.symbol, self.product_type, side)
         if result:
             logger.info(f"[{self.symbol}] ✅ 플래시 청산 완료{reason_str}")
             ticker = self.client.get_ticker(self.symbol, self.product_type)
@@ -1431,7 +1546,7 @@ class TradingBot:
             return True
         
         logger.error(f"[{self.symbol}] ❌ 청산 최종 실패")
-        send_error_alert(self.symbol, "청산 최종 실패")
+        send_error_alert(self.symbol, f"{side_label} 청산 최종 실패")
         return False
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1519,6 +1634,65 @@ class TradingBot:
         
         return is_bull, float(k), float(d)
     
+    def get_stochastic_signal_short(self) -> tuple:
+        """
+        [v4.0] 숏용 스토캐스틱 신호 (별도 파라미터 사용)
+        숏 조건: K < D (하락장)
+        """
+        if not self.short_enabled:
+            return False, 0, 0
+        
+        now_utc = datetime.now(timezone.utc)
+        current_utc_date = now_utc.strftime('%Y-%m-%d')
+        
+        # 캐시 확인
+        if self._stoch_cache_short['utc_date'] == current_utc_date:
+            return (
+                self._stoch_cache_short['is_bear'],
+                self._stoch_cache_short['k'],
+                self._stoch_cache_short['d']
+            )
+        
+        # 숏 전용 파라미터로 계산
+        required = self.short_stoch_k_period + self.short_stoch_k_smooth + self.short_stoch_d_period + 50
+        df = self.signal_client.get_candles_pagination(self.symbol, '1D', required)
+        
+        if df.empty:
+            return False, 0, 0
+        
+        # 숏 전용 스토캐스틱 계산
+        low_min = df['low'].rolling(window=self.short_stoch_k_period).min()
+        high_max = df['high'].rolling(window=self.short_stoch_k_period).max()
+        fast_k = ((df['close'] - low_min) / (high_max - low_min)) * 100
+        fast_k = fast_k.replace([np.inf, -np.inf], np.nan)
+        slow_k = fast_k.rolling(window=self.short_stoch_k_smooth).mean()
+        slow_d = slow_k.rolling(window=self.short_stoch_d_period).mean()
+        
+        valid_k = slow_k.dropna()
+        valid_d = slow_d.dropna()
+        
+        if len(valid_k) < 1 or len(valid_d) < 1:
+            return False, 0, 0
+        
+        k = valid_k.iloc[-1]
+        d = valid_d.iloc[-1]
+        
+        if pd.isna(k) or pd.isna(d):
+            return False, 0, 0
+        
+        is_bear = k < d  # 숏은 K < D
+        
+        self._stoch_cache_short = {
+            'utc_date': current_utc_date,
+            'is_bear': is_bear,
+            'k': float(k),
+            'd': float(d)
+        }
+        
+        logger.info(f"[{self.symbol}] 📊 숏 스토캐스틱({self.short_stoch_k_period},{self.short_stoch_k_smooth},{self.short_stoch_d_period}): K={k:.2f}, D={d:.2f} → {'하락장' if is_bear else '상승장'}")
+        
+        return is_bear, float(k), float(d)
+    
     def get_target_leverage(self) -> int:
         is_bullish, k, d = self.get_stochastic_signal()
         if is_bullish:
@@ -1546,15 +1720,70 @@ class TradingBot:
         return signal
     
     def get_final_action(self) -> tuple:
-        ma_signal = self.get_ma_signal()
-        if ma_signal is None:
-            return ('HOLD', 0)
-        if ma_signal == 0:
-            return ('CASH', 0)
-        target_lev = self.get_target_leverage()
-        if target_lev == 0:
-            return ('CASH', 0)
-        return ('LONG', target_lev)
+        """
+        [v4.0] 최종 액션 결정 (롱 우선, 숏 차선)
+        Returns: (action, leverage, side)
+            action: 'LONG', 'SHORT', 'CASH', 'HOLD'
+            leverage: 목표 레버리지
+            side: 'long', 'short', None
+        """
+        # ═══════════════════════════════════════════════════════════════
+        # 1. 롱 조건 확인: 가격 > MA AND K > D
+        # ═══════════════════════════════════════════════════════════════
+        df = self.signal_client.get_candles(self.symbol, self.timeframe, self.ma_period + 10)
+        if df is None or df.empty or len(df) < self.ma_period:
+            logger.warning(f"[{self.symbol}] Binance {self.timeframe} 캔들 조회 실패")
+            return ('HOLD', 0, None)
+        
+        df['ma'] = self.calculate_ma(df)
+        open_price = df.iloc[-1]['open']
+        ma_long = df.iloc[-1]['ma']
+        
+        if pd.isna(ma_long):
+            return ('HOLD', 0, None)
+        
+        ma_long_signal = open_price > ma_long  # 가격 > MA
+        is_bull, k_long, d_long = self.get_stochastic_signal()
+        
+        logger.info(f"[{self.symbol}] 📊 롱 조건: 시가 {open_price:.2f} {'>' if ma_long_signal else '<='} MA{self.ma_period} {ma_long:.2f}, K={k_long:.2f} {'>' if is_bull else '<='} D={d_long:.2f}")
+        
+        # 롱 조건 충족: 가격 > MA AND K > D
+        if ma_long_signal and is_bull:
+            target_lev = self.leverage_up
+            if target_lev > 0:
+                logger.info(f"[{self.symbol}] ✅ 롱 조건 충족 → Long {target_lev}x")
+                return ('LONG', target_lev, 'long')
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 2. 숏 조건 확인: 가격 < MA AND K < D (롱 미충족 시)
+        # ═══════════════════════════════════════════════════════════════
+        if self.short_enabled:
+            # 숏 전용 MA 계산
+            df_short = self.signal_client.get_candles(self.symbol, self.timeframe, self.short_ma_period + 10)
+            if df_short is not None and not df_short.empty and len(df_short) >= self.short_ma_period:
+                if self.ma_type == 'EMA':
+                    ma_short = df_short['close'].ewm(span=self.short_ma_period, adjust=False).mean().iloc[-1]
+                else:
+                    ma_short = df_short['close'].rolling(window=self.short_ma_period).mean().iloc[-1]
+                
+                open_price_short = df_short.iloc[-1]['open']
+                
+                if not pd.isna(ma_short):
+                    ma_short_signal = open_price_short < ma_short  # 가격 < MA
+                    is_bear, k_short, d_short = self.get_stochastic_signal_short()
+                    
+                    logger.info(f"[{self.symbol}] 📊 숏 조건: 시가 {open_price_short:.2f} {'<' if ma_short_signal else '>='} MA{self.short_ma_period} {ma_short:.2f}, K={k_short:.2f} {'<' if is_bear else '>='} D={d_short:.2f}")
+                    
+                    # 숏 조건 충족: 가격 < MA AND K < D
+                    if ma_short_signal and is_bear:
+                        logger.info(f"[{self.symbol}] ✅ 숏 조건 충족 → Short {self.short_leverage}x")
+                        return ('SHORT', self.short_leverage, 'short')
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 3. 둘 다 미충족 → 현금
+        # ═══════════════════════════════════════════════════════════════
+        logger.info(f"[{self.symbol}] ❌ 롱/숏 조건 모두 미충족 → 현금")
+        return ('CASH', 0, None)
     
     def adjust_leverage(self, target: int) -> bool:
         if target <= 0:
@@ -1593,55 +1822,128 @@ class TradingBot:
             df['ma'] = self.calculate_ma(df)
             ma = df.iloc[-1]['ma']
             open_p = df.iloc[-1]['open']
-            sig = "🟢 LONG" if open_p > ma else "🔴 CASH"
-            logger.info(f"📈 MA{self.ma_period} (Binance): ${ma:,.2f}, 시가: ${open_p:,.2f} → {sig}")
+            sig = "🟢 LONG" if open_p > ma else "🔴"
+            logger.info(f"📈 롱 MA{self.ma_period} (Binance): ${ma:,.2f}, 시가: ${open_p:,.2f} → {sig}")
         
         is_bull, k, d = self.get_stochastic_signal()
-        e_desc = f"{self.leverage_down}x" if self.leverage_down > 0 else "현금"
-        stoch_sig = f"🟢 상승장→{self.leverage_up}x" if is_bull else f"🔴 하락장→{e_desc}"
-        
-        # 캐시 상태 표시
+        stoch_sig = f"🟢 K>D" if is_bull else f"🔴 K<=D"
         cache_date = self._stoch_cache.get('utc_date', 'N/A')
-        logger.info(f"📉 Stoch (Binance): K={k:.2f}, D={d:.2f} → {stoch_sig} [캐시: UTC {cache_date}]")
+        logger.info(f"📉 롱 Stoch({self.stoch_k_period},{self.stoch_k_smooth},{self.stoch_d_period}): K={k:.2f}, D={d:.2f} → {stoch_sig}")
+        
+        # 숏 지표 표시
+        if self.short_enabled:
+            df_short = self.signal_client.get_candles(self.symbol, self.timeframe, self.short_ma_period + 10)
+            if df_short is not None and not df_short.empty and len(df_short) >= self.short_ma_period:
+                if self.ma_type == 'EMA':
+                    ma_short = df_short['close'].ewm(span=self.short_ma_period, adjust=False).mean().iloc[-1]
+                else:
+                    ma_short = df_short['close'].rolling(window=self.short_ma_period).mean().iloc[-1]
+                open_p_short = df_short.iloc[-1]['open']
+                sig_short = "🔴 SHORT" if open_p_short < ma_short else "🟢"
+                logger.info(f"📈 숏 MA{self.short_ma_period} (Binance): ${ma_short:,.2f}, 시가: ${open_p_short:,.2f} → {sig_short}")
+            
+            is_bear, k_short, d_short = self.get_stochastic_signal_short()
+            stoch_sig_short = f"🔴 K<D" if is_bear else f"🟢 K>=D"
+            logger.info(f"📉 숏 Stoch({self.short_stoch_k_period},{self.short_stoch_k_smooth},{self.short_stoch_d_period}): K={k_short:.2f}, D={d_short:.2f} → {stoch_sig_short}")
         
         pos = self.get_current_position()
-        if pos['side'] == 'long' and pos['size'] > 0:
-            logger.info(f"📍 포지션 (Bitget): Long {pos['leverage']}x, {pos['size']} @ ${pos.get('avg_price',0):,.2f}, PnL: {pos['unrealized_pnl']:+,.2f}")
-        else:
+        if pos['long']:
+            p = pos['long']
+            logger.info(f"📍 롱 포지션 (Bitget): {p['size']} @ {p['leverage']}x, ${p.get('avg_price',0):,.2f}, PnL: {p['unrealized_pnl']:+,.2f}")
+        if pos['short']:
+            p = pos['short']
+            logger.info(f"📍 숏 포지션 (Bitget): {p['size']} @ {p['leverage']}x, ${p.get('avg_price',0):,.2f}, PnL: {p['unrealized_pnl']:+,.2f}")
+        if not pos['long'] and not pos['short']:
             logger.info(f"📍 포지션 (Bitget): 없음 (현금)")
         logger.info(f"{'='*60}\n")
     
     def execute(self):
+        """[v4.0] 롱/숏 통합 실행"""
         logger.info(f"\n{'─'*60}")
         logger.info(f"[{self.symbol}] {self.description} (배분: {self.allocation_pct:.0f}%)")
         logger.info(f"{'─'*60}")
-        action, target_lev = self.get_final_action()
+        
+        action, target_lev, target_side = self.get_final_action()
         pos = self.get_current_position()
-        has_pos = pos['side'] == 'long' and pos['size'] > 0
-        curr_lev = pos.get('leverage', 0)
-        if has_pos:
-            logger.info(f"[{self.symbol}] 📍 현재: Long {pos['size']} @ {curr_lev}x, PnL: {pos['unrealized_pnl']:+.2f}")
-        else:
+        
+        has_long = pos['long'] is not None and pos['long']['size'] > 0
+        has_short = pos['short'] is not None and pos['short']['size'] > 0
+        
+        # 현재 포지션 로깅
+        if has_long:
+            p = pos['long']
+            logger.info(f"[{self.symbol}] 📍 현재: Long {p['size']} @ {p['leverage']}x, PnL: {p['unrealized_pnl']:+.2f}")
+        if has_short:
+            p = pos['short']
+            logger.info(f"[{self.symbol}] 📍 현재: Short {p['size']} @ {p['leverage']}x, PnL: {p['unrealized_pnl']:+.2f}")
+        if not has_long and not has_short:
             logger.info(f"[{self.symbol}] 📍 현재: 현금")
+        
+        # 목표 로깅
         lev_desc = f"{target_lev}x" if target_lev > 0 else "현금"
-        logger.info(f"[{self.symbol}] 🎯 목표: {action} ({lev_desc})")
+        side_desc = target_side.upper() if target_side else "N/A"
+        logger.info(f"[{self.symbol}] 🎯 목표: {action} ({side_desc} {lev_desc})")
+        
+        # ═══════════════════════════════════════════════════════════════
+        # 액션 실행 (롱 우선)
+        # ═══════════════════════════════════════════════════════════════
+        
         if action == 'LONG':
-            if not has_pos:
+            # 숏 포지션 있으면 먼저 청산
+            if has_short:
+                logger.info(f"[{self.symbol}] 📉 숏 청산 (롱 전환)")
+                self.safe_limit_close(side='short', reason="롱 전환")
+                time.sleep(1)
+            
+            if not has_long:
                 logger.info(f"[{self.symbol}] 📈 Long 진입 (Lev {target_lev}x)")
-                self.safe_limit_entry(target_lev)
-            elif curr_lev != target_lev:
-                self.adjust_leverage(target_lev)
+                self.safe_limit_entry(target_lev, side='long')
             else:
-                logger.info(f"[{self.symbol}] ➡️ Long 유지")
-                # 포지션 유지 내역 추가
-                add_hold_position(self.symbol, pos['size'], curr_lev, pos.get('unrealized_pnl', 0))
+                curr_lev = pos['long']['leverage']
+                if curr_lev != target_lev:
+                    # 레버리지 변경
+                    logger.info(f"[{self.symbol}] 🔄 롱 레버리지 변경: {curr_lev}x → {target_lev}x")
+                    send_leverage_change_alert(self.symbol, curr_lev, target_lev)
+                    self.safe_limit_close(side='long', reason="레버리지 변경")
+                    time.sleep(1)
+                    self.safe_limit_entry(target_lev, side='long')
+                else:
+                    logger.info(f"[{self.symbol}] ➡️ Long 유지")
+                    add_hold_position(self.symbol, pos['long']['size'], curr_lev, 
+                                    pos['long'].get('unrealized_pnl', 0), side='long')
+        
+        elif action == 'SHORT':
+            # 롱 포지션 있으면 먼저 청산
+            if has_long:
+                logger.info(f"[{self.symbol}] 📈 롱 청산 (숏 전환)")
+                self.safe_limit_close(side='long', reason="숏 전환")
+                time.sleep(1)
+            
+            if not has_short:
+                logger.info(f"[{self.symbol}] 📉 Short 진입 (Lev {target_lev}x)")
+                self.safe_limit_entry(target_lev, side='short')
+            else:
+                curr_lev = pos['short']['leverage']
+                if curr_lev != target_lev:
+                    # 레버리지 변경
+                    logger.info(f"[{self.symbol}] 🔄 숏 레버리지 변경: {curr_lev}x → {target_lev}x")
+                    send_leverage_change_alert(self.symbol, curr_lev, target_lev)
+                    self.safe_limit_close(side='short', reason="레버리지 변경")
+                    time.sleep(1)
+                    self.safe_limit_entry(target_lev, side='short')
+                else:
+                    logger.info(f"[{self.symbol}] ➡️ Short 유지")
+                    add_hold_position(self.symbol, pos['short']['size'], curr_lev,
+                                    pos['short'].get('unrealized_pnl', 0), side='short')
+        
         elif action == 'CASH':
-            if has_pos:
-                is_bull, _, _ = self.get_stochastic_signal()
-                reason = "스토캐스틱 하락장" if (not is_bull and self.leverage_down == 0) else "MA 시그널"
-                logger.info(f"[{self.symbol}] 📉 청산 ({reason})")
-                self.safe_limit_close(reason=reason)
-            else:
+            if has_long:
+                logger.info(f"[{self.symbol}] 📉 롱 청산 (현금 전환)")
+                self.safe_limit_close(side='long', reason="조건 미충족")
+            if has_short:
+                logger.info(f"[{self.symbol}] 📈 숏 청산 (현금 전환)")
+                self.safe_limit_close(side='short', reason="조건 미충족")
+            if not has_long and not has_short:
                 logger.info(f"[{self.symbol}] ➡️ 현금 유지")
 
 
@@ -1678,18 +1980,17 @@ def load_api_credentials() -> tuple:
 
 def print_config():
     print("\n" + "="*70)
-    print("📊 Bitget 자동매매 봇 v3.8 (Binance 신호 + Bitget 매매) + 텔레그램")
-    print("   [v3.5] 스토캐스틱 iloc[-1] + 일봉 시작(09:00 KST) 캐싱")
-    print("   [v3.6] 진입 자산 규모: min(가용잔고 기반, 총자산×allocation_pct)")
-    print("   [v3.7] 텔레그램 메시지 통합: 거래 시간대별 종합 리포트")
-    print("   [v3.8] 서버 점검 시 자동 복구: API 실패 시 다음 스케줄 재시도")
+    print("📊 Bitget 자동매매 봇 v4.0 (롱/숏 통합) + 텔레그램")
+    print("   [v4.0] 롱 조건: 가격>MA AND K>D → 롱 진입")
+    print("   [v4.0] 숏 조건: 가격<MA AND K<D → 숏 진입 (롱 미충족 시)")
+    print("   [v4.0] 충돌 시 롱 우선")
     print("="*70)
     print(f"🔧 모드: {'🔵 DRY RUN' if DRY_RUN else '🔴 LIVE'}")
     print(f"📡 신호 데이터: Binance Futures 공개 API")
     print(f"💹 매매 실행: Bitget Futures API")
     print(f"📲 알림: 텔레그램")
     print(f"📋 지정가 최대 재시도: {MAX_LIMIT_RETRY}회 (초과 시 시장가)")
-    print(f"\n📈 전략 (allocation_pct 적용):")
+    print(f"\n📈 롱 전략 (allocation_pct 적용):")
     total_alloc = 0
     for c in TRADING_CONFIGS:
         if c['enabled']:
@@ -1699,6 +2000,12 @@ def print_config():
             total_alloc += alloc
             print(f"   {c['symbol']}: {alloc:.0f}% | MA{c['ma_period']} + Stoch{stoch}, Lev {c['leverage_up']}x/{e}")
     print(f"\n   총 배분: {total_alloc:.0f}%")
+    
+    print(f"\n📉 숏 전략 (롱 조건 미충족 시):")
+    for c in SHORT_TRADING_CONFIGS:
+        if c['enabled']:
+            stoch = f"({c['stoch_k_period']},{c['stoch_k_smooth']},{c['stoch_d_period']})"
+            print(f"   {c['symbol']}: MA{c['ma_period']} + Stoch{stoch}, Lev {c['leverage']}x")
     print("="*70)
 
 
