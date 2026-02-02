@@ -1550,8 +1550,67 @@ def count_futures_empty_slots():
     return empty_count
 
 
+def get_futures_position_status():
+    """
+    각 심볼별 포지션 보유 여부 확인
+    Returns: {'BTCUSDT': True, 'ETHUSDT': False, ...}
+    """
+    status = {}
+    positions = get_all_futures_positions()
+    active_symbols = set(pos['symbol'] for pos in positions)
+
+    for config in SHORT_TRADING_CONFIGS:
+        status[config['symbol']] = config['symbol'] in active_symbols
+
+    return status
+
+
+def calculate_futures_invest_amount_for_symbol(symbol):
+    """
+    특정 심볼에 대한 Futures 투자 금액 계산
+    - 해당 심볼에 이미 포지션이 있으면 0 반환 (중복 진입 방지)
+    - bitget_bot-8.py의 calculate_invest_amount_for_symbol 로직 참고
+    """
+    balance = get_futures_balance()
+    usdt_free = balance['free']
+
+    # 포지션 상태 확인
+    position_status = get_futures_position_status()
+
+    # 해당 심볼에 이미 포지션이 있으면 0 반환
+    if position_status.get(symbol, False):
+        logging.info(f"[{symbol}] 이미 포지션 보유 중 - 추가 진입 불가")
+        return 0
+
+    # 빈 슬롯(포지션 없는 코인) 수 계산
+    empty_count = sum(1 for has_pos in position_status.values() if not has_pos)
+
+    if empty_count == 0:
+        logging.info(f"[{symbol}] 모든 슬롯에 포지션 보유 중")
+        return 0
+
+    # 가용 잔고의 99.5% 사용 (수수료 여유)
+    available = usdt_free * 0.995
+
+    # 빈 슬롯에 균등 배분
+    invest_per_slot = available / empty_count
+
+    # 최대 투자금 제한: 총 자산 / 전체 코인 수
+    total_equity = balance['total']
+    max_per_slot = total_equity / len(SHORT_TRADING_CONFIGS) if SHORT_TRADING_CONFIGS else 0
+
+    invest_amount = min(invest_per_slot, max_per_slot)
+
+    if invest_amount < FUTURES_MIN_ORDER_USDT:
+        return 0
+
+    logging.info(f"[{symbol}] 투자금 계산: 가용잔고 ${usdt_free:.2f}, 빈슬롯 {empty_count}개, 배분금액 ${invest_amount:.2f}")
+
+    return invest_amount
+
+
 def calculate_futures_invest_amount():
-    """Futures 개별 포지션 투자 금액 계산"""
+    """Futures 개별 포지션 투자 금액 계산 (레거시 - 하위 호환용)"""
     balance = get_futures_balance()
     usdt_free = balance['free']
 
@@ -1583,22 +1642,21 @@ def open_short_position(config):
     leverage = config['leverage']
 
     try:
-        # 이미 포지션이 있는지 확인
-        existing_pos = get_futures_position(symbol)
-        if existing_pos:
-            logging.info(f"[{symbol}] 이미 포지션 보유 중 (side: {existing_pos['side']})")
+        # 투자 금액 계산 (포지션 중복 체크 포함)
+        # calculate_futures_invest_amount_for_symbol은 해당 심볼에 이미 포지션이 있으면 0을 반환
+        invest_amount = calculate_futures_invest_amount_for_symbol(symbol)
+        if invest_amount <= 0:
+            # 이미 포지션이 있거나 투자 금액이 없는 경우
+            return None
+
+        if invest_amount < FUTURES_MIN_ORDER_USDT:
+            logging.warning(f"[{symbol}] 투자 금액 부족: ${invest_amount:.2f}")
             return None
 
         # 현재가 조회
         current_price = get_futures_current_price(symbol)
         if not current_price:
             logging.error(f"[{symbol}] 현재가 조회 실패")
-            return None
-
-        # 투자 금액 계산
-        invest_amount = calculate_futures_invest_amount()
-        if invest_amount < FUTURES_MIN_ORDER_USDT:
-            logging.warning(f"[{symbol}] 투자 금액 부족: ${invest_amount:.2f}")
             return None
 
         # 마진 타입 설정 (CROSSED)
