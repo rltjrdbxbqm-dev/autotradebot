@@ -1818,21 +1818,41 @@ def get_long_stochastic_signal(symbol):
     return long_stoch_cache.get(symbol)
 
 
+def _safe_float(value, default=0):
+    """None-safe float 변환"""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def _safe_int(value, default=1):
+    """None-safe int 변환"""
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 def get_futures_position(symbol):
     """Futures 포지션 조회"""
     try:
         positions = futures_exchange.fetch_positions([symbol])
         for pos in positions:
-            if pos['symbol'] == symbol and abs(float(pos.get('contracts', 0))) > 0:
+            if pos['symbol'] == symbol and abs(_safe_float(pos.get('contracts'))) > 0:
                 return {
                     'symbol': symbol,
                     'side': pos['side'],  # 'short' or 'long'
-                    'contracts': abs(float(pos['contracts'])),
-                    'notional': abs(float(pos.get('notional', 0))),
-                    'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
-                    'entry_price': float(pos.get('entryPrice', 0)),
-                    'leverage': int(pos.get('leverage', 1)),
-                    'liquidation_price': float(pos.get('liquidationPrice', 0))
+                    'contracts': abs(_safe_float(pos.get('contracts'))),
+                    'notional': abs(_safe_float(pos.get('notional'))),
+                    'unrealized_pnl': _safe_float(pos.get('unrealizedPnl')),
+                    'entry_price': _safe_float(pos.get('entryPrice')),
+                    'leverage': _safe_int(pos.get('leverage')),
+                    'liquidation_price': _safe_float(pos.get('liquidationPrice'))
                 }
         return None
     except Exception as e:
@@ -1846,15 +1866,15 @@ def get_all_futures_positions():
         positions = futures_exchange.fetch_positions()
         active_positions = []
         for pos in positions:
-            if abs(float(pos.get('contracts', 0))) > 0:
+            if abs(_safe_float(pos.get('contracts'))) > 0:
                 active_positions.append({
                     'symbol': pos['symbol'],
                     'side': pos['side'],
-                    'contracts': abs(float(pos['contracts'])),
-                    'notional': abs(float(pos.get('notional', 0))),
-                    'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
-                    'entry_price': float(pos.get('entryPrice', 0)),
-                    'leverage': int(pos.get('leverage', 1))
+                    'contracts': abs(_safe_float(pos.get('contracts'))),
+                    'notional': abs(_safe_float(pos.get('notional'))),
+                    'unrealized_pnl': _safe_float(pos.get('unrealizedPnl')),
+                    'entry_price': _safe_float(pos.get('entryPrice')),
+                    'leverage': _safe_int(pos.get('leverage'))
                 })
         return active_positions
     except Exception as e:
