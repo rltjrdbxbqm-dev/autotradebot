@@ -64,6 +64,7 @@ if not all([TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
 
 STOCH_CACHE_FILE = os.path.join(os.path.expanduser('~'), 'binance_stoch_cache.json')
 FUTURES_STOCH_CACHE_FILE = os.path.join(os.path.expanduser('~'), 'binance_futures_stoch_cache.json')
+LONG_STOCH_CACHE_FILE = os.path.join(os.path.expanduser('~'), 'binance_long_stoch_cache.json')
 
 # ============================================================
 # 거래 설정
@@ -645,6 +646,260 @@ FUTURES_EXCLUDED_COINS = [
 ]
 
 # ============================================================
+# USDS-M Futures 롱 포지션 설정 (백테스트 결과 2026-02-06)
+# ============================================================
+# 총 234개 코인 분석, 183개 적합 코인 선정
+# 전략: 숏 필터 (가격 < MA_short AND K < D) 비활성 시
+#       롱 진입 (가격 > MA_long AND K > D)
+# 제외 기준: CAGR <= 0%, CAGR < 5% (수익성 부족), MDD <= -99% (완파 위험)
+# ============================================================
+
+LONG_TRADING_CONFIGS = [
+    {'symbol': '1000CATUSDT', 'short_ma': 178, 'short_sk': 46, 'short_sks': 7, 'short_sd': 39, 'long_ma': 177, 'long_sk': 70, 'long_sks': 77, 'long_sd': 23, 'long_lev': 3},
+    {'symbol': '1000CHEEMSUSDT', 'short_ma': 327, 'short_sk': 148, 'short_sks': 52, 'short_sd': 36, 'long_ma': 37, 'long_sk': 128, 'long_sks': 60, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': '1000FLOKIUSDT', 'short_ma': 106, 'short_sk': 103, 'short_sks': 74, 'short_sd': 50, 'long_ma': 23, 'long_sk': 14, 'long_sks': 14, 'long_sd': 46, 'long_lev': 1},
+    {'symbol': '1000LUNCUSDT', 'short_ma': 83, 'short_sk': 130, 'short_sks': 38, 'short_sd': 11, 'long_ma': 48, 'long_sk': 89, 'long_sks': 7, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': '1000PEPEUSDT', 'short_ma': 50, 'short_sk': 63, 'short_sks': 78, 'short_sd': 31, 'long_ma': 20, 'long_sk': 14, 'long_sks': 5, 'long_sd': 13, 'long_lev': 1},
+    {'symbol': '1000SATSUSDT', 'short_ma': 350, 'short_sk': 97, 'short_sks': 34, 'short_sd': 7, 'long_ma': 21, 'long_sk': 100, 'long_sks': 74, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': '1000SHIBUSDT', 'short_ma': 118, 'short_sk': 74, 'short_sks': 40, 'short_sd': 26, 'long_ma': 106, 'long_sk': 16, 'long_sks': 28, 'long_sd': 4, 'long_lev': 1},
+    {'symbol': '1INCHUSDT', 'short_ma': 123, 'short_sk': 138, 'short_sks': 39, 'short_sd': 47, 'long_ma': 55, 'long_sk': 129, 'long_sks': 10, 'long_sd': 45, 'long_lev': 2},
+    {'symbol': '1MBABYDOGEUSDT', 'short_ma': 39, 'short_sk': 85, 'short_sks': 10, 'short_sd': 7, 'long_ma': 36, 'long_sk': 47, 'long_sks': 80, 'long_sd': 42, 'long_lev': 4},
+    {'symbol': 'ACEUSDT', 'short_ma': 346, 'short_sk': 138, 'short_sks': 62, 'short_sd': 27, 'long_ma': 21, 'long_sk': 15, 'long_sks': 80, 'long_sd': 33, 'long_lev': 1},
+    {'symbol': 'ACTUSDT', 'short_ma': 118, 'short_sk': 89, 'short_sks': 74, 'short_sd': 31, 'long_ma': 42, 'long_sk': 150, 'long_sks': 34, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'AEVOUSDT', 'short_ma': 165, 'short_sk': 84, 'short_sks': 78, 'short_sd': 14, 'long_ma': 21, 'long_sk': 97, 'long_sks': 80, 'long_sd': 13, 'long_lev': 1},
+    {'symbol': 'AGLDUSDT', 'short_ma': 335, 'short_sk': 135, 'short_sks': 80, 'short_sd': 39, 'long_ma': 180, 'long_sk': 53, 'long_sks': 5, 'long_sd': 9, 'long_lev': 1},
+    {'symbol': 'AIUSDT', 'short_ma': 101, 'short_sk': 20, 'short_sks': 79, 'short_sd': 11, 'long_ma': 48, 'long_sk': 143, 'long_sks': 19, 'long_sd': 8, 'long_lev': 2},
+    {'symbol': 'AKTUSDT', 'short_ma': 324, 'short_sk': 98, 'short_sks': 13, 'short_sd': 13, 'long_ma': 29, 'long_sk': 33, 'long_sks': 16, 'long_sd': 4, 'long_lev': 1},
+    {'symbol': 'ALCHUSDT', 'short_ma': 297, 'short_sk': 69, 'short_sks': 34, 'short_sd': 12, 'long_ma': 241, 'long_sk': 79, 'long_sks': 53, 'long_sd': 48, 'long_lev': 2},
+    {'symbol': 'ALICEUSDT', 'short_ma': 94, 'short_sk': 57, 'short_sks': 7, 'short_sd': 16, 'long_ma': 350, 'long_sk': 40, 'long_sks': 10, 'long_sd': 41, 'long_lev': 1},
+    {'symbol': 'ALTUSDT', 'short_ma': 148, 'short_sk': 124, 'short_sks': 70, 'short_sd': 46, 'long_ma': 22, 'long_sk': 131, 'long_sks': 68, 'long_sd': 20, 'long_lev': 3},
+    {'symbol': 'ANKRUSDT', 'short_ma': 283, 'short_sk': 119, 'short_sks': 62, 'short_sd': 40, 'long_ma': 70, 'long_sk': 106, 'long_sks': 27, 'long_sd': 8, 'long_lev': 1},
+    {'symbol': 'APEUSDT', 'short_ma': 136, 'short_sk': 132, 'short_sks': 71, 'short_sd': 29, 'long_ma': 203, 'long_sk': 81, 'long_sks': 76, 'long_sd': 45, 'long_lev': 1},
+    {'symbol': 'ARBUSDT', 'short_ma': 208, 'short_sk': 145, 'short_sks': 80, 'short_sd': 21, 'long_ma': 21, 'long_sk': 102, 'long_sks': 60, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': 'ARKMUSDT', 'short_ma': 159, 'short_sk': 89, 'short_sks': 30, 'short_sd': 28, 'long_ma': 23, 'long_sk': 108, 'long_sks': 80, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'ARKUSDT', 'short_ma': 341, 'short_sk': 133, 'short_sks': 65, 'short_sd': 42, 'long_ma': 247, 'long_sk': 84, 'long_sks': 80, 'long_sd': 47, 'long_lev': 1},
+    {'symbol': 'ARUSDT', 'short_ma': 144, 'short_sk': 34, 'short_sks': 24, 'short_sd': 16, 'long_ma': 131, 'long_sk': 40, 'long_sks': 22, 'long_sd': 15, 'long_lev': 1},
+    {'symbol': 'ATOMUSDT', 'short_ma': 47, 'short_sk': 112, 'short_sks': 66, 'short_sd': 10, 'long_ma': 21, 'long_sk': 35, 'long_sks': 75, 'long_sd': 30, 'long_lev': 1},
+    {'symbol': 'AUCTIONUSDT', 'short_ma': 197, 'short_sk': 142, 'short_sks': 31, 'short_sd': 10, 'long_ma': 22, 'long_sk': 66, 'long_sks': 28, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'AVAXUSDT', 'short_ma': 93, 'short_sk': 87, 'short_sks': 18, 'short_sd': 24, 'long_ma': 115, 'long_sk': 103, 'long_sks': 48, 'long_sd': 47, 'long_lev': 2},
+    {'symbol': 'BANANAUSDT', 'short_ma': 279, 'short_sk': 130, 'short_sks': 66, 'short_sd': 47, 'long_ma': 36, 'long_sk': 102, 'long_sks': 75, 'long_sd': 25, 'long_lev': 3},
+    {'symbol': 'BANUSDT', 'short_ma': 51, 'short_sk': 108, 'short_sks': 25, 'short_sd': 8, 'long_ma': 225, 'long_sk': 43, 'long_sks': 61, 'long_sd': 32, 'long_lev': 2},
+    {'symbol': 'BBUSDT', 'short_ma': 225, 'short_sk': 137, 'short_sks': 71, 'short_sd': 32, 'long_ma': 164, 'long_sk': 94, 'long_sks': 80, 'long_sd': 43, 'long_lev': 4},
+    {'symbol': 'BEAMXUSDT', 'short_ma': 126, 'short_sk': 90, 'short_sks': 78, 'short_sd': 33, 'long_ma': 80, 'long_sk': 99, 'long_sks': 80, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'BELUSDT', 'short_ma': 228, 'short_sk': 146, 'short_sks': 10, 'short_sd': 13, 'long_ma': 20, 'long_sk': 14, 'long_sks': 5, 'long_sd': 4, 'long_lev': 1},
+    {'symbol': 'BIGTIMEUSDT', 'short_ma': 201, 'short_sk': 67, 'short_sks': 66, 'short_sd': 8, 'long_ma': 49, 'long_sk': 142, 'long_sks': 60, 'long_sd': 37, 'long_lev': 2},
+    {'symbol': 'BLURUSDT', 'short_ma': 117, 'short_sk': 107, 'short_sks': 51, 'short_sd': 27, 'long_ma': 54, 'long_sk': 54, 'long_sks': 29, 'long_sd': 13, 'long_lev': 4},
+    {'symbol': 'BNTUSDT', 'short_ma': 290, 'short_sk': 112, 'short_sks': 64, 'short_sd': 50, 'long_ma': 320, 'long_sk': 83, 'long_sks': 31, 'long_sd': 10, 'long_lev': 4},
+    {'symbol': 'BOMEUSDT', 'short_ma': 182, 'short_sk': 150, 'short_sks': 79, 'short_sd': 46, 'long_ma': 147, 'long_sk': 113, 'long_sks': 80, 'long_sd': 21, 'long_lev': 1},
+    {'symbol': 'BRETTUSDT', 'short_ma': 267, 'short_sk': 84, 'short_sks': 26, 'short_sd': 43, 'long_ma': 58, 'long_sk': 114, 'long_sks': 75, 'long_sd': 4, 'long_lev': 1},
+    {'symbol': 'CAKEUSDT', 'short_ma': 39, 'short_sk': 144, 'short_sks': 78, 'short_sd': 24, 'long_ma': 36, 'long_sk': 16, 'long_sks': 6, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'CATIUSDT', 'short_ma': 320, 'short_sk': 26, 'short_sks': 7, 'short_sd': 35, 'long_ma': 20, 'long_sk': 150, 'long_sks': 13, 'long_sd': 38, 'long_lev': 1},
+    {'symbol': 'CELRUSDT', 'short_ma': 268, 'short_sk': 150, 'short_sks': 32, 'short_sd': 48, 'long_ma': 27, 'long_sk': 150, 'long_sks': 5, 'long_sd': 11, 'long_lev': 2},
+    {'symbol': 'CFXUSDT', 'short_ma': 161, 'short_sk': 86, 'short_sks': 65, 'short_sd': 27, 'long_ma': 313, 'long_sk': 149, 'long_sks': 76, 'long_sd': 49, 'long_lev': 3},
+    {'symbol': 'CHESSUSDT', 'short_ma': 114, 'short_sk': 85, 'short_sks': 76, 'short_sd': 49, 'long_ma': 23, 'long_sk': 118, 'long_sks': 41, 'long_sd': 5, 'long_lev': 3},
+    {'symbol': 'CHRUSDT', 'short_ma': 100, 'short_sk': 149, 'short_sks': 59, 'short_sd': 40, 'long_ma': 203, 'long_sk': 92, 'long_sks': 80, 'long_sd': 49, 'long_lev': 1},
+    {'symbol': 'CKBUSDT', 'short_ma': 217, 'short_sk': 112, 'short_sks': 79, 'short_sd': 18, 'long_ma': 49, 'long_sk': 75, 'long_sks': 26, 'long_sd': 12, 'long_lev': 3},
+    {'symbol': 'COTIUSDT', 'short_ma': 231, 'short_sk': 122, 'short_sks': 36, 'short_sd': 24, 'long_ma': 20, 'long_sk': 15, 'long_sks': 6, 'long_sd': 18, 'long_lev': 1},
+    {'symbol': 'COWUSDT', 'short_ma': 265, 'short_sk': 94, 'short_sks': 29, 'short_sd': 9, 'long_ma': 59, 'long_sk': 77, 'long_sks': 31, 'long_sd': 48, 'long_lev': 3},
+    {'symbol': 'CYBERUSDT', 'short_ma': 350, 'short_sk': 116, 'short_sks': 77, 'short_sd': 37, 'long_ma': 63, 'long_sk': 117, 'long_sks': 16, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': 'DOGSUSDT', 'short_ma': 39, 'short_sk': 22, 'short_sks': 45, 'short_sd': 34, 'long_ma': 130, 'long_sk': 72, 'long_sks': 80, 'long_sd': 49, 'long_lev': 4},
+    {'symbol': 'DUSKUSDT', 'short_ma': 108, 'short_sk': 109, 'short_sks': 64, 'short_sd': 39, 'long_ma': 20, 'long_sk': 16, 'long_sks': 27, 'long_sd': 41, 'long_lev': 1},
+    {'symbol': 'DYMUSDT', 'short_ma': 312, 'short_sk': 143, 'short_sks': 72, 'short_sd': 43, 'long_ma': 67, 'long_sk': 16, 'long_sks': 23, 'long_sd': 49, 'long_lev': 4},
+    {'symbol': 'ENAUSDT', 'short_ma': 204, 'short_sk': 150, 'short_sks': 63, 'short_sd': 33, 'long_ma': 255, 'long_sk': 83, 'long_sks': 66, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'ENSUSDT', 'short_ma': 224, 'short_sk': 130, 'short_sks': 56, 'short_sd': 23, 'long_ma': 332, 'long_sk': 88, 'long_sks': 24, 'long_sd': 22, 'long_lev': 3},
+    {'symbol': 'ETHFIUSDT', 'short_ma': 229, 'short_sk': 142, 'short_sks': 61, 'short_sd': 11, 'long_ma': 20, 'long_sk': 16, 'long_sks': 80, 'long_sd': 39, 'long_lev': 1},
+    {'symbol': 'ETHWUSDT', 'short_ma': 290, 'short_sk': 133, 'short_sks': 74, 'short_sd': 40, 'long_ma': 350, 'long_sk': 27, 'long_sks': 35, 'long_sd': 15, 'long_lev': 3},
+    {'symbol': 'FETUSDT', 'short_ma': 143, 'short_sk': 134, 'short_sks': 34, 'short_sd': 38, 'long_ma': 42, 'long_sk': 14, 'long_sks': 35, 'long_sd': 16, 'long_lev': 1},
+    {'symbol': 'FIDAUSDT', 'short_ma': 141, 'short_sk': 54, 'short_sks': 32, 'short_sd': 41, 'long_ma': 320, 'long_sk': 78, 'long_sks': 19, 'long_sd': 38, 'long_lev': 1},
+    {'symbol': 'FLOWUSDT', 'short_ma': 218, 'short_sk': 59, 'short_sks': 29, 'short_sd': 19, 'long_ma': 66, 'long_sk': 18, 'long_sks': 21, 'long_sd': 18, 'long_lev': 3},
+    {'symbol': 'FLUXUSDT', 'short_ma': 73, 'short_sk': 77, 'short_sks': 60, 'short_sd': 38, 'long_ma': 207, 'long_sk': 71, 'long_sks': 80, 'long_sd': 19, 'long_lev': 2},
+    {'symbol': 'GASUSDT', 'short_ma': 49, 'short_sk': 136, 'short_sks': 62, 'short_sd': 5, 'long_ma': 20, 'long_sk': 81, 'long_sks': 80, 'long_sd': 50, 'long_lev': 3},
+    {'symbol': 'GHSTUSDT', 'short_ma': 300, 'short_sk': 55, 'short_sks': 39, 'short_sd': 23, 'long_ma': 20, 'long_sk': 14, 'long_sks': 7, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'GLMUSDT', 'short_ma': 85, 'short_sk': 69, 'short_sks': 32, 'short_sd': 13, 'long_ma': 49, 'long_sk': 128, 'long_sks': 77, 'long_sd': 43, 'long_lev': 4},
+    {'symbol': 'GMTUSDT', 'short_ma': 107, 'short_sk': 133, 'short_sks': 68, 'short_sd': 48, 'long_ma': 173, 'long_sk': 76, 'long_sks': 5, 'long_sd': 13, 'long_lev': 2},
+    {'symbol': 'GMXUSDT', 'short_ma': 88, 'short_sk': 99, 'short_sks': 79, 'short_sd': 39, 'long_ma': 260, 'long_sk': 34, 'long_sks': 61, 'long_sd': 30, 'long_lev': 2},
+    {'symbol': 'GRTUSDT', 'short_ma': 94, 'short_sk': 94, 'short_sks': 34, 'short_sd': 7, 'long_ma': 44, 'long_sk': 69, 'long_sks': 78, 'long_sd': 22, 'long_lev': 1},
+    {'symbol': 'HBARUSDT', 'short_ma': 129, 'short_sk': 111, 'short_sks': 76, 'short_sd': 40, 'long_ma': 24, 'long_sk': 48, 'long_sks': 52, 'long_sd': 18, 'long_lev': 1},
+    {'symbol': 'HFTUSDT', 'short_ma': 331, 'short_sk': 149, 'short_sks': 79, 'short_sd': 46, 'long_ma': 38, 'long_sk': 36, 'long_sks': 10, 'long_sd': 25, 'long_lev': 2},
+    {'symbol': 'HIGHUSDT', 'short_ma': 317, 'short_sk': 146, 'short_sks': 61, 'short_sd': 45, 'long_ma': 31, 'long_sk': 124, 'long_sks': 35, 'long_sd': 7, 'long_lev': 3},
+    {'symbol': 'HOTUSDT', 'short_ma': 178, 'short_sk': 118, 'short_sks': 51, 'short_sd': 48, 'long_ma': 293, 'long_sk': 16, 'long_sks': 26, 'long_sd': 10, 'long_lev': 1},
+    {'symbol': 'ICPUSDT', 'short_ma': 42, 'short_sk': 147, 'short_sks': 72, 'short_sd': 4, 'long_ma': 231, 'long_sk': 105, 'long_sks': 6, 'long_sd': 5, 'long_lev': 2},
+    {'symbol': 'ILVUSDT', 'short_ma': 182, 'short_sk': 107, 'short_sks': 80, 'short_sd': 29, 'long_ma': 37, 'long_sk': 83, 'long_sks': 24, 'long_sd': 9, 'long_lev': 3},
+    {'symbol': 'IMXUSDT', 'short_ma': 105, 'short_sk': 118, 'short_sks': 46, 'short_sd': 42, 'long_ma': 96, 'long_sk': 127, 'long_sks': 77, 'long_sd': 49, 'long_lev': 4},
+    {'symbol': 'INJUSDT', 'short_ma': 41, 'short_sk': 141, 'short_sks': 48, 'short_sd': 14, 'long_ma': 126, 'long_sk': 57, 'long_sks': 20, 'long_sd': 8, 'long_lev': 3},
+    {'symbol': 'IOSTUSDT', 'short_ma': 245, 'short_sk': 82, 'short_sks': 80, 'short_sd': 50, 'long_ma': 61, 'long_sk': 65, 'long_sks': 16, 'long_sd': 32, 'long_lev': 1},
+    {'symbol': 'IOTAUSDT', 'short_ma': 151, 'short_sk': 128, 'short_sks': 59, 'short_sd': 47, 'long_ma': 68, 'long_sk': 73, 'long_sks': 29, 'long_sd': 15, 'long_lev': 2},
+    {'symbol': 'IOTXUSDT', 'short_ma': 203, 'short_sk': 149, 'short_sks': 70, 'short_sd': 26, 'long_ma': 21, 'long_sk': 16, 'long_sks': 72, 'long_sd': 9, 'long_lev': 1},
+    {'symbol': 'IOUSDT', 'short_ma': 124, 'short_sk': 133, 'short_sks': 57, 'short_sd': 42, 'long_ma': 217, 'long_sk': 60, 'long_sks': 64, 'long_sd': 14, 'long_lev': 4},
+    {'symbol': 'JASMYUSDT', 'short_ma': 40, 'short_sk': 111, 'short_sks': 14, 'short_sd': 28, 'long_ma': 33, 'long_sk': 133, 'long_sks': 7, 'long_sd': 22, 'long_lev': 1},
+    {'symbol': 'JUPUSDT', 'short_ma': 39, 'short_sk': 146, 'short_sks': 59, 'short_sd': 28, 'long_ma': 59, 'long_sk': 14, 'long_sks': 27, 'long_sd': 41, 'long_lev': 4},
+    {'symbol': 'KASUSDT', 'short_ma': 152, 'short_sk': 139, 'short_sks': 61, 'short_sd': 46, 'long_ma': 207, 'long_sk': 95, 'long_sks': 6, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'KNCUSDT', 'short_ma': 72, 'short_sk': 136, 'short_sks': 28, 'short_sd': 13, 'long_ma': 37, 'long_sk': 93, 'long_sks': 80, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'KSMUSDT', 'short_ma': 156, 'short_sk': 144, 'short_sks': 58, 'short_sd': 39, 'long_ma': 207, 'long_sk': 148, 'long_sks': 15, 'long_sd': 33, 'long_lev': 1},
+    {'symbol': 'LSKUSDT', 'short_ma': 82, 'short_sk': 115, 'short_sks': 64, 'short_sd': 44, 'long_ma': 51, 'long_sk': 73, 'long_sks': 33, 'long_sd': 12, 'long_lev': 3},
+    {'symbol': 'LUMIAUSDT', 'short_ma': 293, 'short_sk': 139, 'short_sks': 49, 'short_sd': 41, 'long_ma': 264, 'long_sk': 74, 'long_sks': 35, 'long_sd': 46, 'long_lev': 3},
+    {'symbol': 'MAGICUSDT', 'short_ma': 277, 'short_sk': 121, 'short_sks': 36, 'short_sd': 44, 'long_ma': 89, 'long_sk': 80, 'long_sks': 22, 'long_sd': 27, 'long_lev': 1},
+    {'symbol': 'MANAUSDT', 'short_ma': 161, 'short_sk': 150, 'short_sks': 78, 'short_sd': 32, 'long_ma': 52, 'long_sk': 144, 'long_sks': 29, 'long_sd': 35, 'long_lev': 4},
+    {'symbol': 'MBOXUSDT', 'short_ma': 61, 'short_sk': 97, 'short_sks': 68, 'short_sd': 49, 'long_ma': 98, 'long_sk': 15, 'long_sks': 75, 'long_sd': 39, 'long_lev': 1},
+    {'symbol': 'MEWUSDT', 'short_ma': 106, 'short_sk': 130, 'short_sks': 47, 'short_sd': 27, 'long_ma': 34, 'long_sk': 96, 'long_sks': 72, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': 'MINAUSDT', 'short_ma': 311, 'short_sk': 44, 'short_sks': 40, 'short_sd': 23, 'long_ma': 46, 'long_sk': 133, 'long_sks': 58, 'long_sd': 17, 'long_lev': 4},
+    {'symbol': 'MOVRUSDT', 'short_ma': 218, 'short_sk': 149, 'short_sks': 55, 'short_sd': 47, 'long_ma': 21, 'long_sk': 140, 'long_sks': 33, 'long_sd': 4, 'long_lev': 4},
+    {'symbol': 'NEARUSDT', 'short_ma': 164, 'short_sk': 118, 'short_sks': 70, 'short_sd': 26, 'long_ma': 244, 'long_sk': 91, 'long_sks': 6, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'NEIROUSDT', 'short_ma': 324, 'short_sk': 105, 'short_sks': 74, 'short_sd': 50, 'long_ma': 111, 'long_sk': 54, 'long_sks': 17, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'NOTUSDT', 'short_ma': 40, 'short_sk': 145, 'short_sks': 65, 'short_sd': 38, 'long_ma': 168, 'long_sk': 47, 'long_sks': 77, 'long_sd': 47, 'long_lev': 1},
+    {'symbol': 'NTRNUSDT', 'short_ma': 235, 'short_sk': 148, 'short_sks': 60, 'short_sd': 50, 'long_ma': 63, 'long_sk': 90, 'long_sks': 76, 'long_sd': 44, 'long_lev': 3},
+    {'symbol': 'ONDOUSDT', 'short_ma': 319, 'short_sk': 101, 'short_sks': 80, 'short_sd': 12, 'long_ma': 275, 'long_sk': 16, 'long_sks': 5, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': 'ONEUSDT', 'short_ma': 123, 'short_sk': 78, 'short_sks': 50, 'short_sd': 44, 'long_ma': 22, 'long_sk': 150, 'long_sks': 7, 'long_sd': 34, 'long_lev': 1},
+    {'symbol': 'ONGUSDT', 'short_ma': 190, 'short_sk': 146, 'short_sks': 80, 'short_sd': 50, 'long_ma': 51, 'long_sk': 107, 'long_sks': 77, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': 'OPUSDT', 'short_ma': 343, 'short_sk': 144, 'short_sks': 75, 'short_sd': 48, 'long_ma': 85, 'long_sk': 147, 'long_sks': 20, 'long_sd': 36, 'long_lev': 2},
+    {'symbol': 'ORDIUSDT', 'short_ma': 172, 'short_sk': 84, 'short_sks': 78, 'short_sd': 41, 'long_ma': 20, 'long_sk': 148, 'long_sks': 5, 'long_sd': 47, 'long_lev': 1},
+    {'symbol': 'PENDLEUSDT', 'short_ma': 129, 'short_sk': 91, 'short_sks': 52, 'short_sd': 44, 'long_ma': 244, 'long_sk': 125, 'long_sks': 74, 'long_sd': 40, 'long_lev': 3},
+    {'symbol': 'PIXELUSDT', 'short_ma': 109, 'short_sk': 87, 'short_sks': 70, 'short_sd': 38, 'long_ma': 214, 'long_sk': 111, 'long_sks': 51, 'long_sd': 10, 'long_lev': 3},
+    {'symbol': 'POLUSDT', 'short_ma': 233, 'short_sk': 24, 'short_sks': 16, 'short_sd': 41, 'long_ma': 153, 'long_sk': 55, 'long_sks': 6, 'long_sd': 14, 'long_lev': 3},
+    {'symbol': 'POLYXUSDT', 'short_ma': 239, 'short_sk': 124, 'short_sks': 65, 'short_sd': 33, 'long_ma': 22, 'long_sk': 133, 'long_sks': 26, 'long_sd': 16, 'long_lev': 3},
+    {'symbol': 'PORTALUSDT', 'short_ma': 152, 'short_sk': 139, 'short_sks': 78, 'short_sd': 30, 'long_ma': 152, 'long_sk': 20, 'long_sks': 78, 'long_sd': 15, 'long_lev': 1},
+    {'symbol': 'POWRUSDT', 'short_ma': 183, 'short_sk': 146, 'short_sks': 67, 'short_sd': 29, 'long_ma': 60, 'long_sk': 150, 'long_sks': 51, 'long_sd': 43, 'long_lev': 4},
+    {'symbol': 'QNTUSDT', 'short_ma': 274, 'short_sk': 145, 'short_sks': 58, 'short_sd': 31, 'long_ma': 147, 'long_sk': 18, 'long_sks': 22, 'long_sd': 16, 'long_lev': 3},
+    {'symbol': 'RAREUSDT', 'short_ma': 188, 'short_sk': 39, 'short_sks': 75, 'short_sd': 35, 'long_ma': 159, 'long_sk': 37, 'long_sks': 5, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'RENDERUSDT', 'short_ma': 110, 'short_sk': 70, 'short_sks': 29, 'short_sd': 15, 'long_ma': 194, 'long_sk': 63, 'long_sks': 14, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'RIFUSDT', 'short_ma': 258, 'short_sk': 77, 'short_sks': 59, 'short_sd': 34, 'long_ma': 21, 'long_sk': 91, 'long_sks': 34, 'long_sd': 23, 'long_lev': 1},
+    {'symbol': 'ROSEUSDT', 'short_ma': 149, 'short_sk': 143, 'short_sks': 69, 'short_sd': 17, 'long_ma': 203, 'long_sk': 108, 'long_sks': 13, 'long_sd': 5, 'long_lev': 2},
+    {'symbol': 'RPLUSDT', 'short_ma': 115, 'short_sk': 124, 'short_sks': 15, 'short_sd': 35, 'long_ma': 298, 'long_sk': 150, 'long_sks': 46, 'long_sd': 39, 'long_lev': 4},
+    {'symbol': 'SAFEUSDT', 'short_ma': 317, 'short_sk': 22, 'short_sks': 64, 'short_sd': 41, 'long_ma': 53, 'long_sk': 70, 'long_sks': 34, 'long_sd': 8, 'long_lev': 3},
+    {'symbol': 'SAGAUSDT', 'short_ma': 250, 'short_sk': 99, 'short_sks': 79, 'short_sd': 38, 'long_ma': 41, 'long_sk': 115, 'long_sks': 67, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'SANTOSUSDT', 'short_ma': 181, 'short_sk': 136, 'short_sks': 39, 'short_sd': 7, 'long_ma': 154, 'long_sk': 150, 'long_sks': 80, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': 'SCRTUSDT', 'short_ma': 105, 'short_sk': 145, 'short_sks': 52, 'short_sd': 50, 'long_ma': 58, 'long_sk': 15, 'long_sks': 5, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'SCRUSDT', 'short_ma': 135, 'short_sk': 129, 'short_sks': 72, 'short_sd': 37, 'long_ma': 37, 'long_sk': 96, 'long_sks': 64, 'long_sd': 15, 'long_lev': 4},
+    {'symbol': 'SEIUSDT', 'short_ma': 192, 'short_sk': 121, 'short_sks': 65, 'short_sd': 39, 'long_ma': 118, 'long_sk': 94, 'long_sks': 60, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': 'SKLUSDT', 'short_ma': 120, 'short_sk': 108, 'short_sks': 80, 'short_sd': 49, 'long_ma': 233, 'long_sk': 59, 'long_sks': 59, 'long_sd': 50, 'long_lev': 2},
+    {'symbol': 'SPELLUSDT', 'short_ma': 227, 'short_sk': 97, 'short_sks': 58, 'short_sd': 43, 'long_ma': 236, 'long_sk': 95, 'long_sks': 5, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'STEEMUSDT', 'short_ma': 49, 'short_sk': 147, 'short_sks': 53, 'short_sd': 18, 'long_ma': 23, 'long_sk': 76, 'long_sks': 27, 'long_sd': 17, 'long_lev': 3},
+    {'symbol': 'STGUSDT', 'short_ma': 83, 'short_sk': 150, 'short_sks': 42, 'short_sd': 34, 'long_ma': 115, 'long_sk': 30, 'long_sks': 6, 'long_sd': 23, 'long_lev': 2},
+    {'symbol': 'STRKUSDT', 'short_ma': 167, 'short_sk': 117, 'short_sks': 56, 'short_sd': 45, 'long_ma': 254, 'long_sk': 40, 'long_sks': 6, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'STXUSDT', 'short_ma': 93, 'short_sk': 136, 'short_sks': 75, 'short_sd': 50, 'long_ma': 39, 'long_sk': 137, 'long_sks': 21, 'long_sd': 4, 'long_lev': 4},
+    {'symbol': 'SUIUSDT', 'short_ma': 108, 'short_sk': 149, 'short_sks': 77, 'short_sd': 50, 'long_ma': 283, 'long_sk': 39, 'long_sks': 63, 'long_sd': 34, 'long_lev': 2},
+    {'symbol': 'SUNUSDT', 'short_ma': 32, 'short_sk': 150, 'short_sks': 54, 'short_sd': 50, 'long_ma': 148, 'long_sk': 14, 'long_sks': 78, 'long_sd': 10, 'long_lev': 1},
+    {'symbol': 'SUPERUSDT', 'short_ma': 77, 'short_sk': 109, 'short_sks': 42, 'short_sd': 44, 'long_ma': 350, 'long_sk': 60, 'long_sks': 80, 'long_sd': 46, 'long_lev': 1},
+    {'symbol': 'SYNUSDT', 'short_ma': 129, 'short_sk': 103, 'short_sks': 36, 'short_sd': 24, 'long_ma': 42, 'long_sk': 44, 'long_sks': 27, 'long_sd': 11, 'long_lev': 3},
+    {'symbol': 'SYSUSDT', 'short_ma': 206, 'short_sk': 48, 'short_sks': 45, 'short_sd': 11, 'long_ma': 189, 'long_sk': 73, 'long_sks': 80, 'long_sd': 25, 'long_lev': 3},
+    {'symbol': 'TAOUSDT', 'short_ma': 88, 'short_sk': 122, 'short_sks': 64, 'short_sd': 12, 'long_ma': 21, 'long_sk': 35, 'long_sks': 7, 'long_sd': 41, 'long_lev': 2},
+    {'symbol': 'TIAUSDT', 'short_ma': 127, 'short_sk': 92, 'short_sks': 40, 'short_sd': 4, 'long_ma': 21, 'long_sk': 148, 'long_sks': 80, 'long_sd': 23, 'long_lev': 4},
+    {'symbol': 'TNSRUSDT', 'short_ma': 269, 'short_sk': 75, 'short_sks': 79, 'short_sd': 44, 'long_ma': 68, 'long_sk': 98, 'long_sks': 7, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': 'TONUSDT', 'short_ma': 115, 'short_sk': 144, 'short_sks': 77, 'short_sd': 47, 'long_ma': 34, 'long_sk': 15, 'long_sks': 23, 'long_sd': 45, 'long_lev': 1},
+    {'symbol': 'TRUUSDT', 'short_ma': 271, 'short_sk': 126, 'short_sks': 61, 'short_sd': 14, 'long_ma': 221, 'long_sk': 127, 'long_sks': 18, 'long_sd': 21, 'long_lev': 1},
+    {'symbol': 'TURBOUSDT', 'short_ma': 71, 'short_sk': 91, 'short_sks': 79, 'short_sd': 35, 'long_ma': 269, 'long_sk': 77, 'long_sks': 41, 'long_sd': 41, 'long_lev': 4},
+    {'symbol': 'TUSDT', 'short_ma': 152, 'short_sk': 137, 'short_sks': 80, 'short_sd': 38, 'long_ma': 112, 'long_sk': 47, 'long_sks': 19, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'TWTUSDT', 'short_ma': 32, 'short_sk': 123, 'short_sks': 73, 'short_sd': 14, 'long_ma': 134, 'long_sk': 15, 'long_sks': 24, 'long_sd': 23, 'long_lev': 3},
+    {'symbol': 'USTCUSDT', 'short_ma': 53, 'short_sk': 98, 'short_sks': 79, 'short_sd': 16, 'long_ma': 20, 'long_sk': 14, 'long_sks': 6, 'long_sd': 48, 'long_lev': 1},
+    {'symbol': 'VANRYUSDT', 'short_ma': 99, 'short_sk': 148, 'short_sks': 59, 'short_sd': 49, 'long_ma': 207, 'long_sk': 64, 'long_sks': 80, 'long_sd': 33, 'long_lev': 1},
+    {'symbol': 'VETUSDT', 'short_ma': 217, 'short_sk': 112, 'short_sks': 73, 'short_sd': 34, 'long_ma': 172, 'long_sk': 54, 'long_sks': 6, 'long_sd': 12, 'long_lev': 3},
+    {'symbol': 'WAXPUSDT', 'short_ma': 154, 'short_sk': 128, 'short_sks': 72, 'short_sd': 39, 'long_ma': 35, 'long_sk': 97, 'long_sks': 6, 'long_sd': 4, 'long_lev': 1},
+    {'symbol': 'WIFUSDT', 'short_ma': 175, 'short_sk': 106, 'short_sks': 63, 'short_sd': 19, 'long_ma': 324, 'long_sk': 58, 'long_sks': 74, 'long_sd': 47, 'long_lev': 1},
+    {'symbol': 'WLDUSDT', 'short_ma': 126, 'short_sk': 146, 'short_sks': 73, 'short_sd': 18, 'long_ma': 305, 'long_sk': 43, 'long_sks': 18, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'WOOUSDT', 'short_ma': 198, 'short_sk': 99, 'short_sks': 69, 'short_sd': 37, 'long_ma': 61, 'long_sk': 86, 'long_sks': 77, 'long_sd': 31, 'long_lev': 1},
+    {'symbol': 'WUSDT', 'short_ma': 88, 'short_sk': 70, 'short_sks': 78, 'short_sd': 42, 'long_ma': 210, 'long_sk': 150, 'long_sks': 16, 'long_sd': 42, 'long_lev': 2},
+    {'symbol': 'XVGUSDT', 'short_ma': 70, 'short_sk': 135, 'short_sks': 32, 'short_sd': 32, 'long_ma': 22, 'long_sk': 21, 'long_sks': 80, 'long_sd': 27, 'long_lev': 4},
+    {'symbol': 'XVSUSDT', 'short_ma': 65, 'short_sk': 147, 'short_sks': 54, 'short_sd': 22, 'long_ma': 135, 'long_sk': 55, 'long_sks': 12, 'long_sd': 20, 'long_lev': 4},
+    {'symbol': 'YFIUSDT', 'short_ma': 246, 'short_sk': 148, 'short_sks': 73, 'short_sd': 44, 'long_ma': 228, 'long_sk': 14, 'long_sks': 24, 'long_sd': 15, 'long_lev': 1},
+    {'symbol': 'ZEREBROUSDT', 'short_ma': 277, 'short_sk': 58, 'short_sks': 48, 'short_sd': 16, 'long_ma': 99, 'long_sk': 89, 'long_sks': 49, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': 'ZKUSDT', 'short_ma': 86, 'short_sk': 77, 'short_sks': 78, 'short_sd': 40, 'long_ma': 75, 'long_sk': 86, 'long_sks': 30, 'long_sd': 8, 'long_lev': 3},
+    {'symbol': 'ZROUSDT', 'short_ma': 122, 'short_sk': 82, 'short_sks': 50, 'short_sd': 31, 'long_ma': 22, 'long_sk': 14, 'long_sks': 5, 'long_sd': 35, 'long_lev': 1},
+    {'symbol': 'ZRXUSDT', 'short_ma': 67, 'short_sk': 110, 'short_sks': 75, 'short_sd': 44, 'long_ma': 350, 'long_sk': 66, 'long_sks': 20, 'long_sd': 17, 'long_lev': 1}
+]
+
+# Futures 롱 매매 제외 코인 (51개 - 백테스트 기준 부적합)
+# 제외 사유: CAGR <= 0% (수익성 없음), CAGR < 5% (수익성 부족), MDD <= -99% (자산 완파 위험)
+LONG_EXCLUDED_COINS = [
+    '1000BONKUSDT',  # 필터 미통과 (CAGR 1087.2%, MDD -86.1%)
+    '1000RATSUSDT',  # CAGR -31.5% (수익성 없음)
+    '1000WHYUSDT',  # CAGR -18.6% (수익성 없음)
+    '1000XECUSDT',  # CAGR 2.1% (수익성 부족)
+    'AAVEUSDT',  # MDD -99.5% (자산 완파 위험)
+    'ACHUSDT',  # MDD -100.0% (자산 완파 위험)
+    'AEROUSDT',  # 필터 미통과 (CAGR 569.2%, MDD -47.9%)
+    'ALGOUSDT',  # MDD -99.2% (자산 완파 위험)
+    'API3USDT',  # MDD -100.0% (자산 완파 위험)
+    'APTUSDT',  # 필터 미통과 (CAGR 9.2%, MDD -56.8%)
+    'ASTRUSDT',  # 필터 미통과 (CAGR 12.8%, MDD -95.4%)
+    'ATAUSDT',  # MDD -99.9% (자산 완파 위험)
+    'AVAUSDT',  # CAGR -95.4% (수익성 없음)
+    'AXLUSDT',  # CAGR -8.1% (수익성 없음)
+    'BICOUSDT',  # CAGR -11.3% (수익성 없음)
+    'BSVUSDT',  # CAGR -11.8% (수익성 없음)
+    'C98USDT',  # CAGR -10.6% (수익성 없음)
+    'CGPTUSDT',  # 필터 미통과 (CAGR 113.8%, MDD -14.9%)
+    'CHILLGUYUSDT',  # CAGR -98.9% (수익성 없음)
+    'CHZUSDT',  # 필터 미통과 (CAGR 14.4%, MDD -98.4%)
+    'COMPUSDT',  # CAGR 1.6% (수익성 부족)
+    'COOKIEUSDT',  # CAGR -38.2% (수익성 없음)
+    'CTSIUSDT',  # 필터 미통과 (CAGR 10.2%, MDD -57.6%)
+    'DEGOUSDT',  # MDD -100.0% (자산 완파 위험)
+    'DENTUSDT',  # CAGR -0.1% (수익성 없음)
+    'DFUSDT',  # CAGR -78.8% (수익성 없음)
+    'DODOXUSDT',  # CAGR -58.3% (수익성 없음)
+    'DOGEUSDT',  # 필터 미통과 (CAGR 120.7%, MDD -96.8%)
+    'EDUUSDT',  # CAGR -68.6% (수익성 없음)
+    'ENJUSDT',  # 필터 미통과 (CAGR 11.8%, MDD -90.9%)
+    'ETCUSDT',  # 필터 미통과 (CAGR 84.6%, MDD -96.2%)
+    'FIOUSDT',  # 필터 미통과 (CAGR 7.3%, MDD -30.6%)
+    'GRASSUSDT',  # CAGR -29.1% (수익성 없음)
+    'GTCUSDT',  # 필터 미통과 (CAGR 8.4%, MDD -46.2%)
+    'GUSDT',  # CAGR -10.1% (수익성 없음)
+    'HOOKUSDT',  # CAGR -71.0% (수익성 없음)
+    'ICXUSDT',  # 필터 미통과 (CAGR 41.9%, MDD -96.8%)
+    'IDUSDT',  # 필터 미통과 (CAGR 15.6%, MDD -61.3%)
+    'JOEUSDT',  # 필터 미통과 (CAGR 13.5%, MDD -63.2%)
+    'JTOUSDT',  # 필터 미통과 (CAGR 11.3%, MDD -35.5%)
+    'KAIAUSDT',  # CAGR -31.4% (수익성 없음)
+    'KOMAUSDT',  # CAGR -75.3% (수익성 없음)
+    'LQTYUSDT',  # CAGR -33.0% (수익성 없음)
+    'LRCUSDT',  # MDD -100.0% (자산 완파 위험)
+    'LUNA2USDT',  # 필터 미통과 (CAGR 124.3%, MDD -93.6%)
+    'MANTAUSDT',  # CAGR -12.1% (수익성 없음)
+    'MASKUSDT',  # MDD -100.0% (자산 완파 위험)
+    'MAVUSDT',  # CAGR -77.2% (수익성 없음)
+    'METISUSDT',  # CAGR -52.0% (수익성 없음)
+    'MEUSDT',  # CAGR 1.3% (수익성 부족)
+    'MOCAUSDT',  # CAGR -33.5% (수익성 없음)
+    'MOODENGUSDT',  # 필터 미통과 (CAGR 575.2%, MDD -62.5%)
+    'MORPHOUSDT',  # 필터 미통과 (CAGR 277.8%, MDD -19.1%)
+    'MOVEUSDT',  # CAGR -55.9% (수익성 없음)
+    'NEOUSDT',  # 필터 미통과 (CAGR 109.1%, MDD -90.1%)
+    'NFPUSDT',  # 필터 미통과 (CAGR 143.7%, MDD -85.3%)
+    'NMRUSDT',  # MDD -99.9% (자산 완파 위험)
+    'OGNUSDT',  # CAGR 0.5% (수익성 부족)
+    'ONTUSDT',  # CAGR 4.1% (수익성 부족)
+    'ORCAUSDT',  # CAGR -70.5% (수익성 없음)
+    'OXTUSDT',  # CAGR -20.5% (수익성 없음)
+    'PENGUUSDT',  # 필터 미통과 (CAGR 64.1%, MDD -28.8%)
+    'PHBUSDT',  # 필터 미통과 (CAGR 134.9%, MDD -86.7%)
+    'POPCATUSDT',  # 필터 미통과 (CAGR 87.4%, MDD -57.0%)
+    'PYTHUSDT',  # CAGR -48.4% (수익성 없음)
+    'QTUMUSDT',  # MDD -100.0% (자산 완파 위험)
+    'RDNTUSDT',  # CAGR -58.9% (수익성 없음)
+    'REZUSDT',  # CAGR -62.6% (수익성 없음)
+    'RONINUSDT',  # CAGR -4.4% (수익성 없음)
+    'RVNUSDT',  # MDD -100.0% (자산 완파 위험)
+    'SANDUSDT',  # MDD -100.0% (자산 완파 위험)
+    'SNXUSDT',  # 필터 미통과 (CAGR 10.4%, MDD -89.0%)
+    'SPXUSDT',  # CAGR -16.9% (수익성 없음)
+    'SSVUSDT',  # 필터 미통과 (CAGR 5.5%, MDD -96.3%)
+    'STORJUSDT',  # MDD -100.0% (자산 완파 위험)
+    'SUSHIUSDT',  # 필터 미통과 (CAGR 43.8%, MDD -93.9%)
+    'THETAUSDT',  # 필터 미통과 (CAGR 133.0%, MDD -95.5%)
+    'TRBUSDT',  # 필터 미통과 (CAGR 58.7%, MDD -85.9%)
+    'UMAUSDT',  # 필터 미통과 (CAGR 139.9%, MDD -88.5%)
+    'XAIUSDT',  # CAGR -57.5% (수익성 없음)
+    'XLMUSDT',  # 필터 미통과 (CAGR 68.7%, MDD -96.2%)
+    'ZENUSDT',  # 필터 미통과 (CAGR 9.8%, MDD -95.6%)
+    'ZETAUSDT',  # 필터 미통과 (CAGR 66.4%, MDD -90.6%)
+    'ZILUSDT',  # 필터 미통과 (CAGR 87.3%, MDD -89.0%)
+]
+
+# Futures 전체 거래 코인 수 (숏/롱 통합 - 포지션 사이징 기준)
+TOTAL_FUTURES_COINS = 234
+
+# ============================================================
 # 전역 변수
 # ============================================================
 
@@ -652,6 +907,8 @@ stoch_cache = {}
 stoch_cache_date = None
 futures_stoch_cache = {}
 futures_stoch_cache_date = None
+long_stoch_cache = {}
+long_stoch_cache_date = None
 spot_exchange = None
 futures_exchange = None
 
@@ -761,6 +1018,7 @@ def send_telegram(message):
 
 def send_trade_summary(spot_buy_list, spot_sell_list, excluded_sell_list,
                        futures_open_list, futures_close_list,
+                       futures_long_open_list, futures_long_close_list,
                        spot_total, spot_usdt, futures_total, futures_usdt,
                        bnb_info, errors):
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -776,7 +1034,7 @@ def send_trade_summary(spot_buy_list, spot_sell_list, excluded_sell_list,
         msg += f"🔶 BNB: {bnb_info['balance']:.4f} (${bnb_info['value']:.2f})\n"
 
     # Futures 자산
-    msg += f"\n<b>📉 USDS-M Futures</b>\n"
+    msg += f"\n<b>📉📈 USDS-M Futures</b>\n"
     msg += f"💰 총 자산: <b>${futures_total:,.2f}</b>\n"
     msg += f"💵 USDT: ${futures_usdt:,.2f}\n"
 
@@ -829,8 +1087,31 @@ def send_trade_summary(spot_buy_list, spot_sell_list, excluded_sell_list,
             msg += f"  ... 외 {len(futures_close_list) - 10}건\n"
         msg += f"━━━━━━━━━━━━━━━\n"
 
+    # Futures 롱 진입
+    if futures_long_open_list:
+        msg += f"🟢 <b>Futures 롱 진입 {len(futures_long_open_list)}건</b>\n"
+        for item in futures_long_open_list[:10]:
+            msg += f"  • {item['symbol']}: ${item['notional']:.2f} ({item['leverage']}x)\n"
+        if len(futures_long_open_list) > 10:
+            msg += f"  ... 외 {len(futures_long_open_list) - 10}건\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+
+    # Futures 롱 청산
+    if futures_long_close_list:
+        msg += f"🔴 <b>Futures 롱 청산 {len(futures_long_close_list)}건</b>\n"
+        for item in futures_long_close_list[:10]:
+            pnl_sign = "+" if item['pnl'] >= 0 else ""
+            emoji = "💚" if item['pnl'] >= 0 else "❤️"
+            msg += f"  • {item['symbol']}: {pnl_sign}{item['pnl']:.2f} {emoji}\n"
+        if len(futures_long_close_list) > 10:
+            msg += f"  ... 외 {len(futures_long_close_list) - 10}건\n"
+        msg += f"━━━━━━━━━━━━━━━\n"
+
     # 거래 없음
-    if not spot_buy_list and not spot_sell_list and not excluded_sell_list and not futures_open_list and not futures_close_list:
+    all_lists = [spot_buy_list, spot_sell_list, excluded_sell_list,
+                 futures_open_list, futures_close_list,
+                 futures_long_open_list, futures_long_close_list]
+    if not any(all_lists):
         msg += f"ℹ️ 거래 없음\n━━━━━━━━━━━━━━━\n"
 
     # 에러
@@ -846,14 +1127,17 @@ def send_trade_summary(spot_buy_list, spot_sell_list, excluded_sell_list,
 
 def send_start_alert():
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    msg = f"🚀 <b>바이낸스 자동매매 봇 시작 (v4.0.0)</b>\n"
+    msg = f"🚀 <b>바이낸스 자동매매 봇 시작 (v5.0.0)</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"📈 Spot: MA + 스토캐스틱 롱\n"
-    msg += f"📉 Futures: MA + 스토캐스틱 숏\n"
+    msg += f"📉 Futures 숏: MA + 스토캐스틱 숏\n"
+    msg += f"📈 Futures 롱: 숏필터 + 롱신호\n"
     msg += f"💰 수수료: 0.075% (Spot), 0.06% (Futures)\n"
     msg += f"🔶 BNB 자동충전 (Spot/Futures)\n"
     msg += f"🪙 Spot 코인: {len(COINS)}개\n"
     msg += f"🔻 Futures 숏: {len(SHORT_TRADING_CONFIGS)}개\n"
+    msg += f"🟢 Futures 롱: {len(LONG_TRADING_CONFIGS)}개\n"
+    msg += f"📊 Futures 총 슬롯: {TOTAL_FUTURES_COINS}개\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"🕐 {now}"
     send_telegram(msg)
@@ -1420,6 +1704,120 @@ def get_futures_stochastic_signal(symbol):
     return futures_stoch_cache.get(symbol)
 
 
+# ============================================================
+# Long 스토캐스틱 캐시 관리
+# ============================================================
+
+def save_long_stoch_cache():
+    """Long 스토캐스틱 캐시 저장"""
+    global long_stoch_cache, long_stoch_cache_date
+    try:
+        save_data = {
+            'cache_date': long_stoch_cache_date.isoformat() if long_stoch_cache_date else None,
+            'data': long_stoch_cache
+        }
+        with open(LONG_STOCH_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(save_data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        logging.error(f"Long 스토캐스틱 캐시 저장 중 오류: {e}")
+        return False
+
+
+def load_long_stoch_cache():
+    """Long 스토캐스틱 캐시 로드"""
+    global long_stoch_cache, long_stoch_cache_date
+    try:
+        if not os.path.exists(LONG_STOCH_CACHE_FILE):
+            return False
+        with open(LONG_STOCH_CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        cache_date_str = data.get('cache_date')
+        if cache_date_str:
+            long_stoch_cache_date = datetime.fromisoformat(cache_date_str).date()
+        long_stoch_cache = data.get('data', {})
+        logging.info(f"Long 스토캐스틱 캐시 로드 완료: 날짜={long_stoch_cache_date}, {len(long_stoch_cache)}개 코인")
+        return True
+    except Exception as e:
+        logging.error(f"Long 스토캐스틱 캐시 로드 중 오류: {e}")
+        return False
+
+
+def should_refresh_long_stoch_cache():
+    """Long 스토캐스틱 캐시 갱신 필요 여부"""
+    global long_stoch_cache_date
+    now_utc = datetime.now(timezone.utc)
+    if long_stoch_cache_date is None or long_stoch_cache_date < now_utc.date():
+        return True
+    return False
+
+
+def refresh_long_stochastic():
+    """Long 스토캐스틱 데이터 갱신 (각 코인별 short_filter + long_signal)"""
+    global long_stoch_cache, long_stoch_cache_date
+    logging.info("📊 Long 스토캐스틱 데이터 전체 갱신 시작...")
+
+    for config in LONG_TRADING_CONFIGS:
+        symbol = config['symbol']
+        try:
+            # Short filter 파라미터 (숏 필터: 이 조건이면 롱 진입 차단)
+            short_k_period = config['short_sk']
+            short_k_smooth = config['short_sks']
+            short_d_period = config['short_sd']
+
+            # Long signal 파라미터 (롱 신호: 이 조건이면 롱 진입)
+            long_k_period = config['long_sk']
+            long_k_smooth = config['long_sks']
+            long_d_period = config['long_sd']
+
+            # 필요한 데이터 수 (두 파라미터 중 더 큰 값 기준)
+            short_required = short_k_period + short_k_smooth + short_d_period + 20
+            long_required = long_k_period + long_k_smooth + long_d_period + 20
+            required_count = max(short_required, long_required)
+
+            df = fetch_futures_ohlcv(symbol, '1d', required_count)
+            if df is None:
+                continue
+
+            # Short filter 스토캐스틱 계산
+            short_slow_k, short_slow_d = calculate_stochastic(df, short_k_period, short_k_smooth, short_d_period)
+
+            # Long signal 스토캐스틱 계산
+            long_slow_k, long_slow_d = calculate_stochastic(df, long_k_period, long_k_smooth, long_d_period)
+
+            cache_entry = {}
+
+            if short_slow_k is not None and short_slow_d is not None:
+                # Short filter: K < D = 하락 추세 = 롱 진입 차단
+                cache_entry['short_filter_signal'] = bool(short_slow_k < short_slow_d)
+                cache_entry['short_slow_k'] = short_slow_k
+                cache_entry['short_slow_d'] = short_slow_d
+
+            if long_slow_k is not None and long_slow_d is not None:
+                # Long signal: K > D = 상승 추세 = 롱 진입
+                cache_entry['long_signal'] = bool(long_slow_k > long_slow_d)
+                cache_entry['long_slow_k'] = long_slow_k
+                cache_entry['long_slow_d'] = long_slow_d
+
+            if cache_entry:
+                long_stoch_cache[symbol] = cache_entry
+
+            time.sleep(0.1)
+        except Exception as e:
+            logging.error(f"Long {symbol} 스토캐스틱 계산 중 오류: {e}")
+
+    long_stoch_cache_date = datetime.now(timezone.utc).date()
+    save_long_stoch_cache()
+    logging.info(f"📊 Long 스토캐스틱 데이터 갱신 완료: {len(long_stoch_cache)}개 코인")
+
+
+def get_long_stochastic_signal(symbol):
+    """Long 스토캐스틱 신호 조회"""
+    if should_refresh_long_stoch_cache():
+        refresh_long_stochastic()
+    return long_stoch_cache.get(symbol)
+
+
 def get_futures_position(symbol):
     """Futures 포지션 조회"""
     try:
@@ -1536,18 +1934,15 @@ def calculate_futures_position_size(config, usdt_amount, current_price):
 
 
 def count_futures_empty_slots():
-    """Futures 포지션이 없는 슬롯 수 계산"""
+    """Futures 포지션이 없는 슬롯 수 계산 (롱+숏 통합)"""
     active_symbols = set()
     positions = get_all_futures_positions()
     for pos in positions:
         active_symbols.add(pos['symbol'])
 
-    empty_count = 0
-    for config in SHORT_TRADING_CONFIGS:
-        if config['symbol'] not in active_symbols:
-            empty_count += 1
-
-    return empty_count
+    # 전체 슬롯은 TOTAL_FUTURES_COINS (234)에서 활성 포지션 수를 빼서 계산
+    empty_count = TOTAL_FUTURES_COINS - len(active_symbols)
+    return max(empty_count, 0)
 
 
 def get_futures_position_status():
@@ -1567,25 +1962,26 @@ def get_futures_position_status():
 
 def calculate_futures_invest_amount_for_symbol(symbol):
     """
-    특정 심볼에 대한 Futures 투자 금액 계산
+    특정 심볼에 대한 Futures 투자 금액 계산 (롱/숏 통합)
     - 해당 심볼에 이미 포지션이 있으면 0 반환 (중복 진입 방지)
-    - bitget_bot-8.py의 calculate_invest_amount_for_symbol 로직 참고
+    - 빈 슬롯 = TOTAL_FUTURES_COINS(234) - (롱 포지션 수 + 숏 포지션 수)
     """
     balance = get_futures_balance()
     usdt_free = balance['free']
 
-    # 포지션 상태 확인
-    position_status = get_futures_position_status()
+    # 모든 활성 포지션 조회
+    positions = get_all_futures_positions()
+    active_symbols = set(pos['symbol'] for pos in positions)
 
     # 해당 심볼에 이미 포지션이 있으면 0 반환
-    if position_status.get(symbol, False):
+    if symbol in active_symbols:
         logging.info(f"[{symbol}] 이미 포지션 보유 중 - 추가 진입 불가")
         return 0
 
-    # 빈 슬롯(포지션 없는 코인) 수 계산
-    empty_count = sum(1 for has_pos in position_status.values() if not has_pos)
+    # 빈 슬롯(포지션 없는 코인) 수 계산 (롱+숏 통합)
+    empty_count = TOTAL_FUTURES_COINS - len(active_symbols)
 
-    if empty_count == 0:
+    if empty_count <= 0:
         logging.info(f"[{symbol}] 모든 슬롯에 포지션 보유 중")
         return 0
 
@@ -1595,9 +1991,9 @@ def calculate_futures_invest_amount_for_symbol(symbol):
     # 빈 슬롯에 균등 배분
     invest_per_slot = available / empty_count
 
-    # 최대 투자금 제한: 총 자산 / 전체 코인 수
+    # 최대 투자금 제한: 총 자산 / TOTAL_FUTURES_COINS
     total_equity = balance['total']
-    max_per_slot = total_equity / len(SHORT_TRADING_CONFIGS) if SHORT_TRADING_CONFIGS else 0
+    max_per_slot = total_equity / TOTAL_FUTURES_COINS if TOTAL_FUTURES_COINS > 0 else 0
 
     invest_amount = min(invest_per_slot, max_per_slot)
 
@@ -1626,7 +2022,7 @@ def calculate_futures_invest_amount():
 
     # 최대 투자금 제한: 총 자산 / 전체 코인 수
     total_equity = balance['total']
-    max_per_slot = total_equity / len(SHORT_TRADING_CONFIGS) if SHORT_TRADING_CONFIGS else 0
+    max_per_slot = total_equity / TOTAL_FUTURES_COINS if TOTAL_FUTURES_COINS > 0 else 0
 
     invest_amount = min(invest_per_slot, max_per_slot)
 
@@ -1726,6 +2122,96 @@ def close_short_position(symbol, reason=""):
         return None
 
 
+def open_long_position(config):
+    """롱 포지션 진입"""
+    symbol = config['symbol']
+    leverage = config['long_lev']
+
+    try:
+        # 투자 금액 계산 (포지션 중복 체크 포함)
+        invest_amount = calculate_futures_invest_amount_for_symbol(symbol)
+        if invest_amount <= 0:
+            return None
+
+        if invest_amount < FUTURES_MIN_ORDER_USDT:
+            logging.warning(f"[{symbol}] 롱 투자 금액 부족: ${invest_amount:.2f}")
+            return None
+
+        # 현재가 조회
+        current_price = get_futures_current_price(symbol)
+        if not current_price:
+            logging.error(f"[{symbol}] 현재가 조회 실패")
+            return None
+
+        # 마진 타입 설정 (CROSSED)
+        set_futures_margin_type(symbol, 'CROSSED')
+
+        # 레버리지 설정
+        set_futures_leverage(symbol, leverage)
+
+        # 수량 계산 - config에 leverage 키가 아닌 long_lev를 사용하므로 임시 config 생성
+        temp_config = dict(config)
+        temp_config['leverage'] = leverage
+        quantity = calculate_futures_position_size(temp_config, invest_amount, current_price)
+        if quantity <= 0:
+            logging.warning(f"[{symbol}] 롱 수량 계산 실패")
+            return None
+
+        # 시장가 롱 주문
+        order = futures_exchange.create_market_buy_order(symbol, quantity)
+
+        logging.info(f"🟢 [{symbol}] 롱 진입 완료: {quantity} @ ~${current_price:.2f} ({leverage}x)")
+
+        return {
+            'symbol': symbol,
+            'side': 'long',
+            'quantity': quantity,
+            'price': current_price,
+            'notional': quantity * current_price,
+            'leverage': leverage
+        }
+
+    except Exception as e:
+        logging.error(f"❌ [{symbol}] 롱 진입 실패: {e}")
+        return None
+
+
+def close_long_position(symbol, reason=""):
+    """롱 포지션 청산"""
+    try:
+        pos = get_futures_position(symbol)
+        if not pos or pos['side'] != 'long':
+            logging.info(f"[{symbol}] 청산할 롱 포지션 없음")
+            return None
+
+        quantity = pos['contracts']
+        entry_price = pos['entry_price']
+        unrealized_pnl = pos['unrealized_pnl']
+
+        # 시장가 매도로 롱 청산
+        order = futures_exchange.create_market_sell_order(symbol, quantity)
+
+        current_price = get_futures_current_price(symbol)
+
+        reason_str = f" ({reason})" if reason else ""
+        pnl_str = f"+{unrealized_pnl:.2f}" if unrealized_pnl >= 0 else f"{unrealized_pnl:.2f}"
+
+        logging.info(f"🔴 [{symbol}] 롱 청산 완료{reason_str}: {quantity} @ ~${current_price:.2f} (PnL: {pnl_str})")
+
+        return {
+            'symbol': symbol,
+            'quantity': quantity,
+            'entry_price': entry_price,
+            'exit_price': current_price,
+            'pnl': unrealized_pnl,
+            'reason': reason
+        }
+
+    except Exception as e:
+        logging.error(f"❌ [{symbol}] 롱 청산 실패: {e}")
+        return None
+
+
 # ============================================================
 # 메인 거래 전략
 # ============================================================
@@ -1812,20 +2298,18 @@ def spot_trade_strategy():
 
 
 def futures_trade_strategy():
-    """Futures 숏 거래 전략"""
+    """Futures 숏+롱 거래 전략"""
     global futures_exchange
-    open_list, close_list, errors = [], [], []
-
-    if not SHORT_TRADING_CONFIGS:
-        logging.info("📉 Futures 숏 설정이 없습니다. 백테스트 결과를 추가하세요.")
-        return open_list, close_list, errors
+    short_open_list, short_close_list = [], []
+    long_open_list, long_close_list = [], []
+    errors = []
 
     try:
         if futures_exchange is None:
             logging.info("📡 Futures 거래소 재초기화 시도...")
             if not init_futures_exchange():
                 logging.warning("⚠️ Futures 거래소 초기화 실패")
-                return open_list, close_list, errors
+                return short_open_list, short_close_list, long_open_list, long_close_list, errors
 
         logging.info("✅ Futures API 연결 정상")
 
@@ -1834,69 +2318,185 @@ def futures_trade_strategy():
 
         balance = get_futures_balance()
         logging.info("=" * 80)
-        logging.info(f"📉 Futures 숏 거래 - 총자산: ${balance['total']:,.2f}, 가용: ${balance['free']:,.2f}")
+        logging.info(f"📉📈 Futures 거래 - 총자산: ${balance['total']:,.2f}, 가용: ${balance['free']:,.2f}")
         logging.info("=" * 80)
 
-        for config in SHORT_TRADING_CONFIGS:
-            symbol = config['symbol']
+        # 현재 모든 포지션 조회 (숏/롱 동시 보유 방지용)
+        all_positions = get_all_futures_positions()
+        active_position_map = {}  # symbol -> side
+        for pos in all_positions:
+            active_position_map[pos['symbol']] = pos['side']
 
-            # 제외 코인 체크
-            if symbol in FUTURES_EXCLUDED_COINS:
-                continue
+        # ─── 숏 전략 루프 ───
+        if SHORT_TRADING_CONFIGS:
+            logging.info("─" * 40)
+            logging.info("🔻 Futures 숏 전략 시작")
+            logging.info("─" * 40)
 
-            try:
-                time.sleep(0.15)
+            for config in SHORT_TRADING_CONFIGS:
+                symbol = config['symbol']
 
-                ma_period = config['ma_period']
-                ma_price = get_futures_ma_price(symbol, ma_period)
-                current_price = get_futures_current_price(symbol)
-                stoch_data = get_futures_stochastic_signal(symbol)
-
-                if ma_price is None or current_price is None:
+                # 제외 코인 체크
+                if symbol in FUTURES_EXCLUDED_COINS:
                     continue
 
-                # 현재 포지션 확인
-                pos = get_futures_position(symbol)
-                has_short = pos and pos['side'] == 'short'
+                try:
+                    time.sleep(0.15)
 
-                # 숏 진입 조건: 가격 < MA AND K < D (하락 추세)
-                ma_condition = current_price < ma_price
-                stoch_condition = stoch_data['short_signal'] if stoch_data and stoch_data.get('short_signal') is not None else False
+                    ma_period = config['ma_period']
+                    ma_price = get_futures_ma_price(symbol, ma_period)
+                    current_price = get_futures_current_price(symbol)
+                    stoch_data = get_futures_stochastic_signal(symbol)
 
-                final_short_condition = ma_condition and stoch_condition
+                    if ma_price is None or current_price is None:
+                        continue
 
-                logging.info(f"[{symbol}] 현재가: ${current_price:.4f}, MA{ma_period}: ${ma_price:.4f}")
-                if stoch_data:
-                    logging.info(f"[{symbol}] Stoch K: {stoch_data['slow_k']:.2f}, D: {stoch_data['slow_d']:.2f}")
-                logging.info(f"[{symbol}] 조건: MA({ma_condition}) AND Stoch({stoch_condition}) = {final_short_condition}")
+                    # 현재 포지션 확인
+                    pos = get_futures_position(symbol)
+                    has_short = pos and pos['side'] == 'short'
+                    has_long = active_position_map.get(symbol) == 'long'
 
-                if final_short_condition:
-                    # 숏 진입 또는 유지
-                    if not has_short:
-                        result = open_short_position(config)
-                        if result:
-                            open_list.append(result)
+                    # 숏 진입 조건: 가격 < MA AND K < D (하락 추세)
+                    ma_condition = current_price < ma_price
+                    stoch_condition = stoch_data['short_signal'] if stoch_data and stoch_data.get('short_signal') is not None else False
+
+                    final_short_condition = ma_condition and stoch_condition
+
+                    logging.info(f"[숏][{symbol}] 현재가: ${current_price:.4f}, MA{ma_period}: ${ma_price:.4f}")
+                    if stoch_data:
+                        logging.info(f"[숏][{symbol}] Stoch K: {stoch_data['slow_k']:.2f}, D: {stoch_data['slow_d']:.2f}")
+                    logging.info(f"[숏][{symbol}] 조건: MA({ma_condition}) AND Stoch({stoch_condition}) = {final_short_condition}")
+
+                    if final_short_condition:
+                        # 숏 진입 또는 유지
+                        if not has_short:
+                            # 동일 코인에 롱 포지션이 있으면 숏 진입 불가
+                            if has_long:
+                                logging.info(f"[숏][{symbol}] ⚠️ 롱 포지션 보유 중 - 숏 진입 불가")
+                                continue
+                            result = open_short_position(config)
+                            if result:
+                                short_open_list.append(result)
+                                active_position_map[symbol] = 'short'
+                        else:
+                            logging.info(f"[숏][{symbol}] ➡️ 숏 포지션 유지")
                     else:
-                        logging.info(f"[{symbol}] ➡️ 숏 포지션 유지")
-                else:
-                    # 조건 미충족 시 청산
-                    if has_short:
-                        reason = "MA 조건 미충족" if not ma_condition else "스토캐스틱 조건 미충족"
-                        result = close_short_position(symbol, reason)
-                        if result:
-                            close_list.append(result)
-                    else:
-                        logging.info(f"[{symbol}] ➡️ 현금 유지 (숏 조건 미충족)")
+                        # 조건 미충족 시 청산
+                        if has_short:
+                            reason = "MA 조건 미충족" if not ma_condition else "스토캐스틱 조건 미충족"
+                            result = close_short_position(symbol, reason)
+                            if result:
+                                short_close_list.append(result)
+                                if symbol in active_position_map:
+                                    del active_position_map[symbol]
+                        else:
+                            logging.info(f"[숏][{symbol}] ➡️ 현금 유지 (숏 조건 미충족)")
 
-            except Exception as e:
-                errors.append(f"Futures {symbol} 처리 중 오류: {e}")
-                logging.error(f"Futures {symbol} 처리 중 오류: {e}")
+                except Exception as e:
+                    errors.append(f"Futures 숏 {symbol} 처리 중 오류: {e}")
+                    logging.error(f"Futures 숏 {symbol} 처리 중 오류: {e}")
+
+        # ─── 롱 전략 루프 ───
+        if LONG_TRADING_CONFIGS:
+            logging.info("─" * 40)
+            logging.info("🟢 Futures 롱 전략 시작")
+            logging.info("─" * 40)
+
+            for config in LONG_TRADING_CONFIGS:
+                symbol = config['symbol']
+
+                # 제외 코인은 LONG_EXCLUDED_COINS에 있지 않은 코인만 (이미 필터링됨)
+                try:
+                    time.sleep(0.15)
+
+                    # MA 조건
+                    long_ma_period = config['long_ma']
+                    short_ma_period = config['short_ma']
+                    current_price = get_futures_current_price(symbol)
+
+                    if current_price is None:
+                        continue
+
+                    # Short filter MA (롱 진입 차단용)
+                    short_ma_price = get_futures_ma_price(symbol, short_ma_period)
+                    # Long MA (롱 진입용)
+                    long_ma_price = get_futures_ma_price(symbol, long_ma_period)
+
+                    if short_ma_price is None or long_ma_price is None:
+                        continue
+
+                    # 스토캐스틱 데이터 조회
+                    long_stoch_data = get_long_stochastic_signal(symbol)
+
+                    if long_stoch_data is None:
+                        continue
+
+                    # Short filter: 가격 < short_MA AND K < D → 롱 진입 차단
+                    short_ma_cond = current_price < short_ma_price
+                    short_stoch_cond = long_stoch_data.get('short_filter_signal', False)  # K < D
+                    short_filter_active = short_ma_cond and short_stoch_cond
+
+                    # Long signal: 가격 > long_MA AND K > D → 롱 진입
+                    long_ma_cond = current_price > long_ma_price
+                    long_stoch_cond = long_stoch_data.get('long_signal', False)  # K > D
+                    long_signal_active = long_ma_cond and long_stoch_cond
+
+                    # 최종 롱 조건: NOT short_filter AND long_signal
+                    final_long_condition = (not short_filter_active) and long_signal_active
+                    # 청산 조건: short_filter OR NOT long_signal
+                    should_close_long = short_filter_active or (not long_signal_active)
+
+                    # 현재 포지션 확인
+                    pos = get_futures_position(symbol)
+                    has_long = pos and pos['side'] == 'long'
+                    has_short = active_position_map.get(symbol) == 'short'
+
+                    logging.info(f"[롱][{symbol}] 현재가: ${current_price:.4f}, Short MA{short_ma_period}: ${short_ma_price:.4f}, Long MA{long_ma_period}: ${long_ma_price:.4f}")
+                    if long_stoch_data:
+                        sk = long_stoch_data.get('short_slow_k', 0)
+                        sd = long_stoch_data.get('short_slow_d', 0)
+                        lk = long_stoch_data.get('long_slow_k', 0)
+                        ld = long_stoch_data.get('long_slow_d', 0)
+                        logging.info(f"[롱][{symbol}] ShortFilter K:{sk:.2f}/D:{sd:.2f}, LongSignal K:{lk:.2f}/D:{ld:.2f}")
+                    logging.info(f"[롱][{symbol}] ShortFilter:{short_filter_active}, LongSignal:{long_signal_active} → 진입:{final_long_condition}")
+
+                    if final_long_condition:
+                        # 롱 진입 또는 유지
+                        if not has_long:
+                            # 동일 코인에 숏 포지션이 있으면 롱 진입 불가
+                            if has_short:
+                                logging.info(f"[롱][{symbol}] ⚠️ 숏 포지션 보유 중 - 롱 진입 불가")
+                                continue
+                            result = open_long_position(config)
+                            if result:
+                                long_open_list.append(result)
+                                active_position_map[symbol] = 'long'
+                        else:
+                            logging.info(f"[롱][{symbol}] ➡️ 롱 포지션 유지")
+                    else:
+                        # 조건 미충족 시 청산
+                        if has_long:
+                            if short_filter_active:
+                                reason = "숏 필터 활성 (하락 추세)"
+                            else:
+                                reason = "롱 신호 미충족"
+                            result = close_long_position(symbol, reason)
+                            if result:
+                                long_close_list.append(result)
+                                if symbol in active_position_map:
+                                    del active_position_map[symbol]
+                        else:
+                            logging.info(f"[롱][{symbol}] ➡️ 현금 유지 (롱 조건 미충족)")
+
+                except Exception as e:
+                    errors.append(f"Futures 롱 {symbol} 처리 중 오류: {e}")
+                    logging.error(f"Futures 롱 {symbol} 처리 중 오류: {e}")
 
     except Exception as e:
         logging.error(f"Futures 전략 실행 중 오류: {e}")
         errors.append(f"Futures 전략 오류: {e}")
 
-    return open_list, close_list, errors
+    return short_open_list, short_close_list, long_open_list, long_close_list, errors
 
 
 def trade_strategy():
@@ -1908,8 +2508,8 @@ def trade_strategy():
     # Spot 전략 실행
     spot_buy_list, spot_sell_list, excluded_sell_list, spot_errors = spot_trade_strategy()
 
-    # Futures 전략 실행
-    futures_open_list, futures_close_list, futures_errors = futures_trade_strategy()
+    # Futures 전략 실행 (숏 + 롱)
+    futures_short_open, futures_short_close, futures_long_open, futures_long_close, futures_errors = futures_trade_strategy()
 
     # 결과 수집
     all_errors = spot_errors + futures_errors
@@ -1925,27 +2525,33 @@ def trade_strategy():
     # 텔레그램 알림
     send_trade_summary(
         spot_buy_list, spot_sell_list, excluded_sell_list,
-        futures_open_list, futures_close_list,
+        futures_short_open, futures_short_close,
+        futures_long_open, futures_long_close,
         spot_total, spot_usdt, futures_total, futures_usdt,
         bnb_info, all_errors
     )
 
     logging.info("=" * 80)
     logging.info(f"📊 완료 - Spot 매수: {len(spot_buy_list)}건 / 매도: {len(spot_sell_list)}건")
-    logging.info(f"📊 완료 - Futures 숏 진입: {len(futures_open_list)}건 / 청산: {len(futures_close_list)}건")
+    logging.info(f"📊 완료 - Futures 숏 진입: {len(futures_short_open)}건 / 청산: {len(futures_short_close)}건")
+    logging.info(f"📊 완료 - Futures 롱 진입: {len(futures_long_open)}건 / 청산: {len(futures_long_close)}건")
     logging.info("=" * 80)
 
 
 def log_strategy_info():
     logging.info("=" * 80)
-    logging.info("🤖 바이낸스 자동매매 봇 v4.0.0 (Spot + USDS-M Futures)")
+    logging.info("🤖 바이낸스 자동매매 봇 v5.0.0 (Spot + USDS-M Futures 숏/롱)")
     logging.info("=" * 80)
     logging.info("📈 Spot 매수: 현재가 > MA(4H) AND Slow %K > Slow %D (1D)")
     logging.info("📈 Spot 매도: 매수 조건 미충족 OR 부적합 코인 (BNB 제외)")
     logging.info("📉 Futures 숏: 현재가 < MA(4H) AND Slow %K < Slow %D (1D)")
-    logging.info("📉 Futures 청산: 숏 조건 미충족")
+    logging.info("📉 Futures 숏 청산: 숏 조건 미충족")
+    logging.info("📈 Futures 롱: NOT 숏필터 AND (현재가 > MA AND K > D)")
+    logging.info("📈 Futures 롱 청산: 숏필터 활성 OR 롱 신호 미충족")
     logging.info(f"🪙 Spot 거래 대상: {len(COINS)}개 코인")
     logging.info(f"🔻 Futures 숏 대상: {len(SHORT_TRADING_CONFIGS)}개 코인")
+    logging.info(f"🟢 Futures 롱 대상: {len(LONG_TRADING_CONFIGS)}개 코인")
+    logging.info(f"📊 Futures 총 슬롯: {TOTAL_FUTURES_COINS}개")
     logging.info(f"🔶 Spot BNB 자동충전: ${BNB_MIN_BALANCE} 이하시 ${BNB_RECHARGE_AMOUNT} 매수")
     logging.info(f"🔶 Futures BNB 자동충전: ${FUTURES_BNB_MIN_BALANCE} 이하시 ${FUTURES_BNB_RECHARGE_AMOUNT} 매수")
     logging.info("=" * 80)
@@ -1967,6 +2573,7 @@ def main():
     # 캐시 로드
     load_stoch_cache()
     load_futures_stoch_cache()
+    load_long_stoch_cache()
 
     log_strategy_info()
     send_start_alert()
