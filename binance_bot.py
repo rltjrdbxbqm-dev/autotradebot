@@ -1818,6 +1818,15 @@ def get_long_stochastic_signal(symbol):
     return long_stoch_cache.get(symbol)
 
 
+def _normalize_symbol(symbol):
+    """ccxt 통합 심볼을 거래소 네이티브 포맷으로 변환
+    예: 'AERO/USDT:USDT' → 'AEROUSDT', 'AEROUSDT' → 'AEROUSDT'
+    """
+    if '/' in symbol:
+        return symbol.replace('/', '').split(':')[0]
+    return symbol
+
+
 def _safe_float(value, default=0):
     """None-safe float 변환"""
     if value is None:
@@ -1843,7 +1852,8 @@ def get_futures_position(symbol):
     try:
         positions = futures_exchange.fetch_positions([symbol])
         for pos in positions:
-            if pos['symbol'] == symbol and abs(_safe_float(pos.get('contracts'))) > 0:
+            normalized = _normalize_symbol(pos['symbol'])
+            if normalized == symbol and abs(_safe_float(pos.get('contracts'))) > 0:
                 return {
                     'symbol': symbol,
                     'side': pos['side'],  # 'short' or 'long'
@@ -1868,7 +1878,7 @@ def get_all_futures_positions():
         for pos in positions:
             if abs(_safe_float(pos.get('contracts'))) > 0:
                 active_positions.append({
-                    'symbol': pos['symbol'],
+                    'symbol': _normalize_symbol(pos['symbol']),
                     'side': pos['side'],
                     'contracts': abs(_safe_float(pos.get('contracts'))),
                     'notional': abs(_safe_float(pos.get('notional'))),
