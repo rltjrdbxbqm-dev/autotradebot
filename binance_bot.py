@@ -577,11 +577,13 @@ FUTURES_EXCLUDED_COINS = [
     'BTCUSDT',  # Sharpe < 0.7
     'CELOUSDT',  # MDD < -85%
     'CETUSUSDT',  # CAGR > 10000% with Trades < 10 (과적합)
+    'CHESSUSDT',  # 바이낸스 상폐 예정 (close-only)
     'COSUSDT',  # Trades <= 2 with Days < 500 (과적합)
     'CRVUSDT',  # Sharpe < 0.7
     'DASHUSDT',  # Sharpe < 0.7
     'DEGENUSDT',  # CAGR > 10000% with Trades < 10 (과적합)
     'DEXEUSDT',  # CAGR > 10000% with Trades < 10 (과적합)
+    'DFUSDT',  # 바이낸스 상폐 예정 (close-only)
     'DIAUSDT',  # CAGR > 10000% with Trades < 10 (과적합)
     'DOTUSDT',  # MDD < -85%
     'DRIFTUSDT',  # Trades <= 2 with Days < 500 (과적합)
@@ -912,6 +914,9 @@ long_stoch_cache_date = None
 spot_exchange = None
 futures_exchange = None
 
+# 런타임 제외 코인 (상폐 예정 등 -4140 에러 발생 시 자동 추가)
+runtime_excluded_coins = set()
+
 # ============================================================
 # API 호출 Timeout Wrapper
 # ============================================================
@@ -1137,7 +1142,7 @@ def send_start_alert():
     msg += f"🪙 Spot 코인: {len(COINS)}개\n"
     msg += f"🔻 Futures 숏: {len(SHORT_TRADING_CONFIGS)}개\n"
     msg += f"🟢 Futures 롱: {len(LONG_TRADING_CONFIGS)}개\n"
-    msg += f"📊 Futures 총 슬롯: {TOTAL_FUTURES_COINS}개\n"
+    msg += f"📊 Futures 총 슬롯: {get_effective_futures_coins()}개 (제외 {TOTAL_FUTURES_COINS - get_effective_futures_coins()}개)\n"
     msg += f"━━━━━━━━━━━━━━━\n"
     msg += f"🕐 {now}"
     send_telegram(msg)
@@ -1963,6 +1968,17 @@ def calculate_futures_position_size(config, usdt_amount, current_price):
     return quantity
 
 
+def get_effective_futures_coins():
+    """실제 거래 가능한 Futures 코인 수 (정적 제외 + 런타임 제외 반영)"""
+    excluded_count = 0
+    all_symbols = set(c['symbol'] for c in SHORT_TRADING_CONFIGS)
+    for symbol in all_symbols:
+        if symbol in FUTURES_EXCLUDED_COINS or symbol in runtime_excluded_coins:
+            excluded_count += 1
+    effective = TOTAL_FUTURES_COINS - excluded_count
+    return max(effective, 1)
+
+
 def count_futures_empty_slots():
     """Futures 포지션이 없는 슬롯 수 계산 (롱+숏 통합)"""
     active_symbols = set()
@@ -1970,8 +1986,8 @@ def count_futures_empty_slots():
     for pos in positions:
         active_symbols.add(pos['symbol'])
 
-    # 전체 슬롯은 TOTAL_FUTURES_COINS (234)에서 활성 포지션 수를 빼서 계산
-    empty_count = TOTAL_FUTURES_COINS - len(active_symbols)
+    effective_total = get_effective_futures_coins()
+    empty_count = effective_total - len(active_symbols)
     return max(empty_count, 0)
 
 
@@ -1994,7 +2010,7 @@ def calculate_futures_invest_amount_for_symbol(symbol):
     """
     특정 심볼에 대한 Futures 투자 금액 계산 (롱/숏 통합)
     - 해당 심볼에 이미 포지션이 있으면 0 반환 (중복 진입 방지)
-    - 빈 슬롯 = TOTAL_FUTURES_COINS(234) - (롱 포지션 수 + 숏 포지션 수)
+    - 빈 슬롯 = 거래가능 코인 수 - (롱 포지션 수 + 숏 포지션 수)
     """
     balance = get_futures_balance()
     usdt_free = balance['free']
@@ -2008,8 +2024,11 @@ def calculate_futures_invest_amount_for_symbol(symbol):
         logging.info(f"[{symbol}] 이미 포지션 보유 중 - 추가 진입 불가")
         return 0
 
+    # 실제 거래 가능 코인 수 (제외 코인 반영)
+    effective_total = get_effective_futures_coins()
+
     # 빈 슬롯(포지션 없는 코인) 수 계산 (롱+숏 통합)
-    empty_count = TOTAL_FUTURES_COINS - len(active_symbols)
+    empty_count = effective_total - len(active_symbols)
 
     if empty_count <= 0:
         logging.info(f"[{symbol}] 모든 슬롯에 포지션 보유 중")
@@ -2021,9 +2040,9 @@ def calculate_futures_invest_amount_for_symbol(symbol):
     # 빈 슬롯에 균등 배분
     invest_per_slot = available / empty_count
 
-    # 최대 투자금 제한: 총 자산 / TOTAL_FUTURES_COINS
+    # 최대 투자금 제한: 총 자산 / 거래가능 코인 수
     total_equity = balance['total']
-    max_per_slot = total_equity / TOTAL_FUTURES_COINS if TOTAL_FUTURES_COINS > 0 else 0
+    max_per_slot = total_equity / effective_total
 
     invest_amount = min(invest_per_slot, max_per_slot)
 
@@ -2050,9 +2069,10 @@ def calculate_futures_invest_amount():
     # 빈 슬롯에 균등 배분
     invest_per_slot = available / empty_slots
 
-    # 최대 투자금 제한: 총 자산 / 전체 코인 수
+    # 최대 투자금 제한: 총 자산 / 거래가능 코인 수
     total_equity = balance['total']
-    max_per_slot = total_equity / TOTAL_FUTURES_COINS if TOTAL_FUTURES_COINS > 0 else 0
+    effective_total = get_effective_futures_coins()
+    max_per_slot = total_equity / effective_total
 
     invest_amount = min(invest_per_slot, max_per_slot)
 
@@ -2113,10 +2133,14 @@ def open_short_position(config):
 
     except Exception as e:
         logging.error(f"❌ [{symbol}] 숏 진입 실패: {e}")
+        # 상폐 예정 코인 자동 제외 (-4140: Invalid symbol status)
+        if '-4140' in str(e):
+            runtime_excluded_coins.add(symbol)
+            logging.warning(f"⚠️ [{symbol}] 런타임 제외 목록에 추가 (상폐 예정)")
         return None
 
 
-def close_short_position(symbol, reason=""):
+def close_short_position(symbol, reason=None):
     """숏 포지션 청산"""
     try:
         pos = get_futures_position(symbol)
@@ -2203,10 +2227,14 @@ def open_long_position(config):
 
     except Exception as e:
         logging.error(f"❌ [{symbol}] 롱 진입 실패: {e}")
+        # 상폐 예정 코인 자동 제외 (-4140: Invalid symbol status)
+        if '-4140' in str(e):
+            runtime_excluded_coins.add(symbol)
+            logging.warning(f"⚠️ [{symbol}] 런타임 제외 목록에 추가 (상폐 예정)")
         return None
 
 
-def close_long_position(symbol, reason=""):
+def close_long_position(symbol, reason=None):
     """롱 포지션 청산"""
     try:
         pos = get_futures_position(symbol)
@@ -2361,13 +2389,15 @@ def futures_trade_strategy():
         if SHORT_TRADING_CONFIGS:
             logging.info("─" * 40)
             logging.info("🔻 Futures 숏 전략 시작")
+            if runtime_excluded_coins:
+                logging.info(f"⚠️ 런타임 제외 코인: {', '.join(sorted(runtime_excluded_coins))}")
             logging.info("─" * 40)
 
             for config in SHORT_TRADING_CONFIGS:
                 symbol = config['symbol']
 
                 # 제외 코인 체크
-                if symbol in FUTURES_EXCLUDED_COINS:
+                if symbol in FUTURES_EXCLUDED_COINS or symbol in runtime_excluded_coins:
                     continue
 
                 try:
@@ -2436,6 +2466,10 @@ def futures_trade_strategy():
                 symbol = config['symbol']
 
                 # 제외 코인은 LONG_EXCLUDED_COINS에 있지 않은 코인만 (이미 필터링됨)
+                # 런타임 제외 코인 체크
+                if symbol in runtime_excluded_coins:
+                    continue
+
                 try:
                     time.sleep(0.15)
 
@@ -2581,7 +2615,7 @@ def log_strategy_info():
     logging.info(f"🪙 Spot 거래 대상: {len(COINS)}개 코인")
     logging.info(f"🔻 Futures 숏 대상: {len(SHORT_TRADING_CONFIGS)}개 코인")
     logging.info(f"🟢 Futures 롱 대상: {len(LONG_TRADING_CONFIGS)}개 코인")
-    logging.info(f"📊 Futures 총 슬롯: {TOTAL_FUTURES_COINS}개")
+    logging.info(f"📊 Futures 총 슬롯: {get_effective_futures_coins()}개 (제외 {TOTAL_FUTURES_COINS - get_effective_futures_coins()}개)")
     logging.info(f"🔶 Spot BNB 자동충전: ${BNB_MIN_BALANCE} 이하시 ${BNB_RECHARGE_AMOUNT} 매수")
     logging.info(f"🔶 Futures BNB 자동충전: ${FUTURES_BNB_MIN_BALANCE} 이하시 ${FUTURES_BNB_RECHARGE_AMOUNT} 매수")
     logging.info("=" * 80)
