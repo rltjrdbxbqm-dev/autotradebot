@@ -911,40 +911,6 @@ def get_usdt_balance():
 # Futures 관련 함수들 (새로 추가)
 # ============================================================
 
-def save_futures_stoch_cache():
-    """Futures 스토캐스틱 캐시 저장"""
-    global futures_stoch_cache, futures_stoch_cache_date
-    try:
-        save_data = {
-            'cache_date': futures_stoch_cache_date.isoformat() if futures_stoch_cache_date else None,
-            'data': futures_stoch_cache
-        }
-        with open(FUTURES_STOCH_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logging.error(f"Futures 스토캐스틱 캐시 저장 중 오류: {e}")
-        return False
-
-
-def load_futures_stoch_cache():
-    """Futures 스토캐스틱 캐시 로드"""
-    global futures_stoch_cache, futures_stoch_cache_date
-    try:
-        if not os.path.exists(FUTURES_STOCH_CACHE_FILE):
-            return False
-        with open(FUTURES_STOCH_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        cache_date_str = data.get('cache_date')
-        if cache_date_str:
-            futures_stoch_cache_date = datetime.fromisoformat(cache_date_str).date()
-        futures_stoch_cache = data.get('data', {})
-        logging.info(f"Futures 스토캐스틱 캐시 로드 완료: 날짜={futures_stoch_cache_date}, {len(futures_stoch_cache)}개 코인")
-        return True
-    except Exception as e:
-        logging.error(f"Futures 스토캐스틱 캐시 로드 중 오류: {e}")
-        return False
-
 
 def get_futures_balance():
     """Futures 지갑 잔고 조회"""
@@ -1075,14 +1041,6 @@ def get_futures_current_price(symbol):
         return None
 
 
-def should_refresh_futures_stoch_cache():
-    """Futures 스토캐스틱 캐시 갱신 필요 여부"""
-    global futures_stoch_cache_date
-    now_utc = datetime.now(timezone.utc)
-    if futures_stoch_cache_date is None or futures_stoch_cache_date < now_utc.date():
-        return True
-    return False
-
 
 def calculate_stochastic(df, k_period, k_smooth, d_period):
     """스토캐스틱 계산 (Slow Stochastic)
@@ -1109,159 +1067,73 @@ def calculate_stochastic(df, k_period, k_smooth, d_period):
         return None, None
 
 
-def refresh_futures_stochastic():
-    """Futures 스토캐스틱 데이터 갱신"""
-    global futures_stoch_cache, futures_stoch_cache_date
-    logging.info("📊 Futures 스토캐스틱 데이터 전체 갱신 시작...")
-
-    for config in SHORT_TRADING_CONFIGS:
-        symbol = config['symbol']
-        try:
-            k_period = config['stoch_k_period']
-            k_smooth = config['stoch_k_smooth']
-            d_period = config['stoch_d_period']
-            required_count = k_period + k_smooth + d_period + 20
-
-            df = fetch_futures_ohlcv(symbol, '1d', required_count)
-            if df is None:
-                continue
-
-            slow_k, slow_d = calculate_stochastic(df, k_period, k_smooth, d_period)
-            if slow_k is not None and slow_d is not None:
-                # 숏 전략: K < D 일 때 숏 진입
-                futures_stoch_cache[symbol] = {
-                    'short_signal': bool(slow_k < slow_d),  # K < D = 하락 추세 = 숏 진입
-                    'slow_k': slow_k,
-                    'slow_d': slow_d
-                }
-            time.sleep(0.1)
-        except Exception as e:
-            logging.error(f"Futures {symbol} 스토캐스틱 계산 중 오류: {e}")
-
-    futures_stoch_cache_date = datetime.now(timezone.utc).date()
-    save_futures_stoch_cache()
-    logging.info(f"📊 Futures 스토캐스틱 데이터 갱신 완료: {len(futures_stoch_cache)}개 코인")
-
 
 def get_futures_stochastic_signal(symbol):
     """Futures 스토캐스틱 신호 조회"""
-    if should_refresh_futures_stoch_cache():
-        refresh_futures_stochastic()
-    return futures_stoch_cache.get(symbol)
+    # 캐시 사용하지 않고 최신 값 계산
+    config = next((c for c in SHORT_TRADING_CONFIGS if c['symbol'] == symbol), None)
+    if not config:
+        return None
+    try:
+        k_period = config['stoch_k_period']
+        k_smooth = config['stoch_k_smooth']
+        d_period = config['stoch_d_period']
+        required_count = k_period + k_smooth + d_period + 20
+        df = fetch_futures_ohlcv(symbol, '1d', required_count)
+        if df is None:
+            return None
+        slow_k, slow_d = calculate_stochastic(df, k_period, k_smooth, d_period)
+        if slow_k is None or slow_d is None:
+            return None
+        return {
+            'short_signal': bool(slow_k < slow_d),
+            'slow_k': slow_k,
+            'slow_d': slow_d
+        }
+    except Exception as e:
+        logging.error(f"Futures {symbol} 스토캐스틱 계산 중 오류: {e}")
+        return None
 
 
 # ============================================================
 # Long 스토캐스틱 캐시 관리
 # ============================================================
 
-def save_long_stoch_cache():
-    """Long 스토캐스틱 캐시 저장"""
-    global long_stoch_cache, long_stoch_cache_date
-    try:
-        save_data = {
-            'cache_date': long_stoch_cache_date.isoformat() if long_stoch_cache_date else None,
-            'data': long_stoch_cache
-        }
-        with open(LONG_STOCH_CACHE_FILE, 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2)
-        return True
-    except Exception as e:
-        logging.error(f"Long 스토캐스틱 캐시 저장 중 오류: {e}")
-        return False
-
-
-def load_long_stoch_cache():
-    """Long 스토캐스틱 캐시 로드"""
-    global long_stoch_cache, long_stoch_cache_date
-    try:
-        if not os.path.exists(LONG_STOCH_CACHE_FILE):
-            return False
-        with open(LONG_STOCH_CACHE_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        cache_date_str = data.get('cache_date')
-        if cache_date_str:
-            long_stoch_cache_date = datetime.fromisoformat(cache_date_str).date()
-        long_stoch_cache = data.get('data', {})
-        logging.info(f"Long 스토캐스틱 캐시 로드 완료: 날짜={long_stoch_cache_date}, {len(long_stoch_cache)}개 코인")
-        return True
-    except Exception as e:
-        logging.error(f"Long 스토캐스틱 캐시 로드 중 오류: {e}")
-        return False
-
-
-def should_refresh_long_stoch_cache():
-    """Long 스토캐스틱 캐시 갱신 필요 여부"""
-    global long_stoch_cache_date
-    now_utc = datetime.now(timezone.utc)
-    if long_stoch_cache_date is None or long_stoch_cache_date < now_utc.date():
-        return True
-    return False
-
-
-def refresh_long_stochastic():
-    """Long 스토캐스틱 데이터 갱신 (각 코인별 short_filter + long_signal)"""
-    global long_stoch_cache, long_stoch_cache_date
-    logging.info("📊 Long 스토캐스틱 데이터 전체 갱신 시작...")
-
-    for config in LONG_TRADING_CONFIGS:
-        symbol = config['symbol']
-        try:
-            # Short filter 파라미터 (숏 필터: 이 조건이면 롱 진입 차단)
-            short_k_period = config['short_sk']
-            short_k_smooth = config['short_sks']
-            short_d_period = config['short_sd']
-
-            # Long signal 파라미터 (롱 신호: 이 조건이면 롱 진입)
-            long_k_period = config['long_sk']
-            long_k_smooth = config['long_sks']
-            long_d_period = config['long_sd']
-
-            # 필요한 데이터 수 (두 파라미터 중 더 큰 값 기준)
-            short_required = short_k_period + short_k_smooth + short_d_period + 20
-            long_required = long_k_period + long_k_smooth + long_d_period + 20
-            required_count = max(short_required, long_required)
-
-            df = fetch_futures_ohlcv(symbol, '1d', required_count)
-            if df is None:
-                continue
-
-            # Short filter 스토캐스틱 계산
-            short_slow_k, short_slow_d = calculate_stochastic(df, short_k_period, short_k_smooth, short_d_period)
-
-            # Long signal 스토캐스틱 계산
-            long_slow_k, long_slow_d = calculate_stochastic(df, long_k_period, long_k_smooth, long_d_period)
-
-            cache_entry = {}
-
-            if short_slow_k is not None and short_slow_d is not None:
-                # Short filter: K < D = 하락 추세 = 롱 진입 차단
-                cache_entry['short_filter_signal'] = bool(short_slow_k < short_slow_d)
-                cache_entry['short_slow_k'] = short_slow_k
-                cache_entry['short_slow_d'] = short_slow_d
-
-            if long_slow_k is not None and long_slow_d is not None:
-                # Long signal: K > D = 상승 추세 = 롱 진입
-                cache_entry['long_signal'] = bool(long_slow_k > long_slow_d)
-                cache_entry['long_slow_k'] = long_slow_k
-                cache_entry['long_slow_d'] = long_slow_d
-
-            if cache_entry:
-                long_stoch_cache[symbol] = cache_entry
-
-            time.sleep(0.1)
-        except Exception as e:
-            logging.error(f"Long {symbol} 스토캐스틱 계산 중 오류: {e}")
-
-    long_stoch_cache_date = datetime.now(timezone.utc).date()
-    save_long_stoch_cache()
-    logging.info(f"📊 Long 스토캐스틱 데이터 갱신 완료: {len(long_stoch_cache)}개 코인")
-
 
 def get_long_stochastic_signal(symbol):
     """Long 스토캐스틱 신호 조회"""
-    if should_refresh_long_stoch_cache():
-        refresh_long_stochastic()
-    return long_stoch_cache.get(symbol)
+    # 캐시 사용하지 않고 최신 값 계산
+    config = next((c for c in LONG_TRADING_CONFIGS if c['symbol'] == symbol), None)
+    if not config:
+        return None
+    try:
+        short_k_period = config['short_sk']
+        short_k_smooth = config['short_sks']
+        short_d_period = config['short_sd']
+        long_k_period = config['long_sk']
+        long_k_smooth = config['long_sks']
+        long_d_period = config['long_sd']
+        short_required = short_k_period + short_k_smooth + short_d_period + 20
+        long_required = long_k_period + long_k_smooth + long_d_period + 20
+        required_count = max(short_required, long_required)
+        df = fetch_futures_ohlcv(symbol, '1d', required_count)
+        if df is None:
+            return None
+        short_slow_k, short_slow_d = calculate_stochastic(df, short_k_period, short_k_smooth, short_d_period)
+        long_slow_k, long_slow_d = calculate_stochastic(df, long_k_period, long_k_smooth, long_d_period)
+        cache_entry = {}
+        if short_slow_k is not None and short_slow_d is not None:
+            cache_entry['short_filter_signal'] = bool(short_slow_k < short_slow_d)
+            cache_entry['short_slow_k'] = short_slow_k
+            cache_entry['short_slow_d'] = short_slow_d
+        if long_slow_k is not None and long_slow_d is not None:
+            cache_entry['long_signal'] = bool(long_slow_k > long_slow_d)
+            cache_entry['long_slow_k'] = long_slow_k
+            cache_entry['long_slow_d'] = long_slow_d
+        return cache_entry if cache_entry else None
+    except Exception as e:
+        logging.error(f"Long {symbol} 스토캐스틱 계산 중 오류: {e}")
+        return None
 
 
 def _normalize_symbol(symbol):
@@ -1983,8 +1855,6 @@ def main():
         logging.warning("⚠️ Futures 거래소 초기화 실패")
 
     # 캐시 로드
-    load_futures_stoch_cache()
-    load_long_stoch_cache()
 
     log_strategy_info()
     send_start_alert()
