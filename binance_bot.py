@@ -1084,6 +1084,31 @@ def should_refresh_futures_stoch_cache():
     return False
 
 
+def calculate_stochastic(df, k_period, k_smooth, d_period):
+    """스토캐스틱 계산 (Slow Stochastic)
+    Returns: (slow_k, slow_d) - 마지막 값, 실패 시 (None, None)
+    """
+    try:
+        if df is None or len(df) < k_period + k_smooth + d_period:
+            return None, None
+        high = df['high']
+        low = df['low']
+        close = df['close']
+        lowest_low = low.rolling(window=k_period).min()
+        highest_high = high.rolling(window=k_period).max()
+        fast_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+        slow_k = fast_k.rolling(window=k_smooth).mean()
+        slow_d = slow_k.rolling(window=d_period).mean()
+        last_k = slow_k.iloc[-1]
+        last_d = slow_d.iloc[-1]
+        if pd.isna(last_k) or pd.isna(last_d):
+            return None, None
+        return float(last_k), float(last_d)
+    except Exception as e:
+        logging.error(f"스토캐스틱 계산 오류: {e}")
+        return None, None
+
+
 def refresh_futures_stochastic():
     """Futures 스토캐스틱 데이터 갱신"""
     global futures_stoch_cache, futures_stoch_cache_date
