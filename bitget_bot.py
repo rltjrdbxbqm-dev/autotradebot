@@ -1022,12 +1022,6 @@ class TradingBot:
 
     def get_long_stochastic(self):
         """롱용 스토캐스틱 (UTC 날짜 기준 캐싱)"""
-        now_utc = datetime.now(timezone.utc)
-        current_date = now_utc.strftime('%Y-%m-%d')
-
-        if self._stoch_cache_long['utc_date'] == current_date:
-            return self._stoch_cache_long['is_bull'], self._stoch_cache_long['k'], self._stoch_cache_long['d']
-
         required = self.long_sk + self.long_sks + self.long_sd + 50
         df = self.signal_client.get_candles_pagination(self.symbol, '1D', required)
         if df.empty:
@@ -1044,18 +1038,11 @@ class TradingBot:
             return False, 0, 0
 
         is_bull = k > d
-        self._stoch_cache_long = {'utc_date': current_date, 'is_bull': is_bull, 'k': k, 'd': d}
         logger.info(f"[{self.symbol}] 📊 롱 Stoch({self.long_sk},{self.long_sks},{self.long_sd}): K={k:.2f}, D={d:.2f} → {'상승' if is_bull else '하락'}")
         return is_bull, k, d
 
     def get_short_stochastic(self):
         """숏용 스토캐스틱 (UTC 날짜 기준 캐싱)"""
-        now_utc = datetime.now(timezone.utc)
-        current_date = now_utc.strftime('%Y-%m-%d')
-
-        if self._stoch_cache_short['utc_date'] == current_date:
-            return self._stoch_cache_short['is_bear'], self._stoch_cache_short['k'], self._stoch_cache_short['d']
-
         required = self.short_sk + self.short_sks + self.short_sd + 50
         df = self.signal_client.get_candles_pagination(self.symbol, '1D', required)
         if df.empty:
@@ -1072,7 +1059,6 @@ class TradingBot:
             return False, 0, 0
 
         is_bear = k < d
-        self._stoch_cache_short = {'utc_date': current_date, 'is_bear': is_bear, 'k': k, 'd': d}
         logger.info(f"[{self.symbol}] 📊 숏 Stoch({self.short_sk},{self.short_sks},{self.short_sd}): K={k:.2f}, D={d:.2f} → {'하락' if is_bear else '상승'}")
         return is_bear, k, d
 
