@@ -1611,182 +1611,180 @@ def futures_trade_strategy():
         logging.info(f"📉📈 Futures 거래 - 총자산: ${balance['total']:,.2f}, 가용: ${balance['free']:,.2f}")
         logging.info("=" * 80)
 
-        # 현재 모든 포지션 조회 (숏/롱 동시 보유 방지용)
+        # 현재 모든 포지션 조회
         all_positions = get_all_futures_positions()
         active_position_map = {}  # symbol -> side
         for pos in all_positions:
             active_position_map[pos['symbol']] = pos['side']
 
-        # ─── 숏 전략 루프 ───
-        if SHORT_TRADING_CONFIGS:
-            logging.info("─" * 40)
-            logging.info("🔻 Futures 숏 전략 시작")
-            if runtime_excluded_coins:
-                logging.info(f"⚠️ 런타임 제외 코인: {', '.join(sorted(runtime_excluded_coins))}")
-            logging.info("─" * 40)
+        # ─── 코인별 통합 설정 맵 생성 ───
+        short_config_map = {}  # symbol -> short config
+        for cfg in SHORT_TRADING_CONFIGS:
+            short_config_map[cfg['symbol']] = cfg
 
-            for config in SHORT_TRADING_CONFIGS:
-                symbol = config['symbol']
+        long_config_map = {}  # symbol -> long config
+        for cfg in LONG_TRADING_CONFIGS:
+            long_config_map[cfg['symbol']] = cfg
 
-                # 제외 코인 체크
-                if symbol in FUTURES_EXCLUDED_COINS or symbol in runtime_excluded_coins:
+        # 모든 고유 심볼 수집 (숏 코인 기준 순서 유지, 롱 전용은 뒤에 추가)
+        all_symbols = []
+        seen = set()
+        for cfg in SHORT_TRADING_CONFIGS:
+            if cfg['symbol'] not in seen:
+                all_symbols.append(cfg['symbol'])
+                seen.add(cfg['symbol'])
+        for cfg in LONG_TRADING_CONFIGS:
+            if cfg['symbol'] not in seen:
+                all_symbols.append(cfg['symbol'])
+                seen.add(cfg['symbol'])
+
+        logging.info("─" * 40)
+        logging.info(f"🔄 코인별 통합 전략 시작 (총 {len(all_symbols)}개)")
+        if runtime_excluded_coins:
+            logging.info(f"⚠️ 런타임 제외 코인: {', '.join(sorted(runtime_excluded_coins))}")
+        logging.info("─" * 40)
+
+        # ─── 코인별 통합 루프 ───
+        for symbol in all_symbols:
+            # 제외 코인 체크
+            if symbol in FUTURES_EXCLUDED_COINS or symbol in runtime_excluded_coins:
+                continue
+
+            try:
+                time.sleep(0.15)
+
+                short_config = short_config_map.get(symbol)
+                long_config = long_config_map.get(symbol)
+
+                current_price = get_futures_current_price(symbol)
+                if current_price is None:
                     continue
 
-                try:
-                    time.sleep(0.15)
+                # 현재 포지션 확인
+                pos = get_futures_position(symbol)
+                current_side = None  # 'short', 'long', or None
+                if pos:
+                    current_side = pos['side']
 
-                    ma_period = config['ma_period']
+                # ── 숏 신호 계산 ──
+                final_short_condition = False
+                short_ma_condition = False
+                short_stoch_condition = False
+                if short_config:
+                    ma_period = short_config['ma_period']
                     ma_price = get_futures_ma_price(symbol, ma_period)
-                    current_price = get_futures_current_price(symbol)
                     stoch_data = get_futures_stochastic_signal(symbol)
 
-                    if ma_price is None or current_price is None:
-                        continue
+                    if ma_price is not None:
+                        short_ma_condition = current_price < ma_price
+                        short_stoch_condition = stoch_data['short_signal'] if stoch_data and stoch_data.get('short_signal') is not None else False
+                        final_short_condition = short_ma_condition and short_stoch_condition
 
-                    # 현재 포지션 확인
-                    pos = get_futures_position(symbol)
-                    has_short = pos and pos['side'] == 'short'
-                    has_long = active_position_map.get(symbol) == 'long'
+                        logging.info(f"[숏][{symbol}] 현재가: ${current_price:.4f}, MA{ma_period}: ${ma_price:.4f}")
+                        if stoch_data:
+                            logging.info(f"[숏][{symbol}] Stoch K: {stoch_data['slow_k']:.2f}, D: {stoch_data['slow_d']:.2f}")
+                        logging.info(f"[숏][{symbol}] 조건: MA({short_ma_condition}) AND Stoch({short_stoch_condition}) = {final_short_condition}")
 
-                    # 숏 진입 조건: 가격 < MA AND K < D (하락 추세)
-                    ma_condition = current_price < ma_price
-                    stoch_condition = stoch_data['short_signal'] if stoch_data and stoch_data.get('short_signal') is not None else False
+                # ── 롱 신호 계산 ──
+                final_long_condition = False
+                short_filter_active = False
+                long_signal_active = False
+                if long_config:
+                    long_ma_period = long_config['long_ma']
+                    short_ma_period = long_config['short_ma']
 
-                    final_short_condition = ma_condition and stoch_condition
-
-                    logging.info(f"[숏][{symbol}] 현재가: ${current_price:.4f}, MA{ma_period}: ${ma_price:.4f}")
-                    if stoch_data:
-                        logging.info(f"[숏][{symbol}] Stoch K: {stoch_data['slow_k']:.2f}, D: {stoch_data['slow_d']:.2f}")
-                    logging.info(f"[숏][{symbol}] 조건: MA({ma_condition}) AND Stoch({stoch_condition}) = {final_short_condition}")
-
-                    if final_short_condition:
-                        # 숏 진입 또는 유지
-                        if not has_short:
-                            # 동일 코인에 롱 포지션이 있으면 숏 진입 불가
-                            if has_long:
-                                logging.info(f"[숏][{symbol}] ⚠️ 롱 포지션 보유 중 - 숏 진입 불가")
-                                continue
-                            result = open_short_position(config)
-                            if result:
-                                short_open_list.append(result)
-                                active_position_map[symbol] = 'short'
-                        else:
-                            logging.info(f"[숏][{symbol}] ➡️ 숏 포지션 유지")
-                    else:
-                        # 조건 미충족 시 청산
-                        if has_short:
-                            reason = "MA 조건 미충족" if not ma_condition else "스토캐스틱 조건 미충족"
-                            result = close_short_position(symbol, reason)
-                            if result:
-                                short_close_list.append(result)
-                                if symbol in active_position_map:
-                                    del active_position_map[symbol]
-                        else:
-                            logging.info(f"[숏][{symbol}] ➡️ 현금 유지 (숏 조건 미충족)")
-
-                except Exception as e:
-                    errors.append(f"Futures 숏 {symbol} 처리 중 오류: {e}")
-                    logging.error(f"Futures 숏 {symbol} 처리 중 오류: {e}")
-
-        # ─── 롱 전략 루프 ───
-        if LONG_TRADING_CONFIGS:
-            logging.info("─" * 40)
-            logging.info("🟢 Futures 롱 전략 시작")
-            logging.info("─" * 40)
-
-            for config in LONG_TRADING_CONFIGS:
-                symbol = config['symbol']
-
-                # 제외 코인은 LONG_EXCLUDED_COINS에 있지 않은 코인만 (이미 필터링됨)
-                # 런타임 제외 코인 체크
-                if symbol in runtime_excluded_coins:
-                    continue
-
-                try:
-                    time.sleep(0.15)
-
-                    # MA 조건
-                    long_ma_period = config['long_ma']
-                    short_ma_period = config['short_ma']
-                    current_price = get_futures_current_price(symbol)
-
-                    if current_price is None:
-                        continue
-
-                    # Short filter MA (롱 진입 차단용)
                     short_ma_price = get_futures_ma_price(symbol, short_ma_period)
-                    # Long MA (롱 진입용)
                     long_ma_price = get_futures_ma_price(symbol, long_ma_period)
-
-                    if short_ma_price is None or long_ma_price is None:
-                        continue
-
-                    # 스토캐스틱 데이터 조회
                     long_stoch_data = get_long_stochastic_signal(symbol)
 
-                    if long_stoch_data is None:
-                        continue
+                    if short_ma_price is not None and long_ma_price is not None and long_stoch_data is not None:
+                        short_ma_cond = current_price < short_ma_price
+                        short_stoch_cond = long_stoch_data.get('short_filter_signal', False)
+                        short_filter_active = short_ma_cond and short_stoch_cond
 
-                    # Short filter: 가격 < short_MA AND K < D → 롱 진입 차단
-                    short_ma_cond = current_price < short_ma_price
-                    short_stoch_cond = long_stoch_data.get('short_filter_signal', False)  # K < D
-                    short_filter_active = short_ma_cond and short_stoch_cond
+                        long_ma_cond = current_price > long_ma_price
+                        long_stoch_cond = long_stoch_data.get('long_signal', False)
+                        long_signal_active = long_ma_cond and long_stoch_cond
 
-                    # Long signal: 가격 > long_MA AND K > D → 롱 진입
-                    long_ma_cond = current_price > long_ma_price
-                    long_stoch_cond = long_stoch_data.get('long_signal', False)  # K > D
-                    long_signal_active = long_ma_cond and long_stoch_cond
+                        final_long_condition = (not short_filter_active) and long_signal_active
 
-                    # 최종 롱 조건: NOT short_filter AND long_signal
-                    final_long_condition = (not short_filter_active) and long_signal_active
-                    # 청산 조건: short_filter OR NOT long_signal
-                    should_close_long = short_filter_active or (not long_signal_active)
+                        logging.info(f"[롱][{symbol}] 현재가: ${current_price:.4f}, Short MA{short_ma_period}: ${short_ma_price:.4f}, Long MA{long_ma_period}: ${long_ma_price:.4f}")
+                        if long_stoch_data:
+                            sk = long_stoch_data.get('short_slow_k', 0)
+                            sd = long_stoch_data.get('short_slow_d', 0)
+                            lk = long_stoch_data.get('long_slow_k', 0)
+                            ld = long_stoch_data.get('long_slow_d', 0)
+                            logging.info(f"[롱][{symbol}] ShortFilter K:{sk:.2f}/D:{sd:.2f}, LongSignal K:{lk:.2f}/D:{ld:.2f}")
+                        logging.info(f"[롱][{symbol}] ShortFilter:{short_filter_active}, LongSignal:{long_signal_active} → 진입:{final_long_condition}")
 
-                    # 현재 포지션 확인
-                    pos = get_futures_position(symbol)
-                    has_long = pos and pos['side'] == 'long'
-                    has_short = active_position_map.get(symbol) == 'short'
-
-                    logging.info(f"[롱][{symbol}] 현재가: ${current_price:.4f}, Short MA{short_ma_period}: ${short_ma_price:.4f}, Long MA{long_ma_period}: ${long_ma_price:.4f}")
-                    if long_stoch_data:
-                        sk = long_stoch_data.get('short_slow_k', 0)
-                        sd = long_stoch_data.get('short_slow_d', 0)
-                        lk = long_stoch_data.get('long_slow_k', 0)
-                        ld = long_stoch_data.get('long_slow_d', 0)
-                        logging.info(f"[롱][{symbol}] ShortFilter K:{sk:.2f}/D:{sd:.2f}, LongSignal K:{lk:.2f}/D:{ld:.2f}")
-                    logging.info(f"[롱][{symbol}] ShortFilter:{short_filter_active}, LongSignal:{long_signal_active} → 진입:{final_long_condition}")
-
-                    if final_long_condition:
-                        # 롱 진입 또는 유지
-                        if not has_long:
-                            # 동일 코인에 숏 포지션이 있으면 롱 진입 불가
-                            if has_short:
-                                logging.info(f"[롱][{symbol}] ⚠️ 숏 포지션 보유 중 - 롱 진입 불가")
-                                continue
-                            result = open_long_position(config)
-                            if result:
-                                long_open_list.append(result)
-                                active_position_map[symbol] = 'long'
-                        else:
-                            logging.info(f"[롱][{symbol}] ➡️ 롱 포지션 유지")
+                # ── 의사결정 (숏 우선) ──
+                if final_short_condition:
+                    # 숏 신호 ON
+                    if current_side == 'short':
+                        logging.info(f"[{symbol}] ➡️ 숏 포지션 유지")
+                    elif current_side == 'long':
+                        # 롱 청산 → 숏 진입
+                        logging.info(f"[{symbol}] 🔄 롱→숏 전환: 롱 청산 후 숏 진입")
+                        close_result = close_long_position(symbol, "숏 신호 발생 - 포지션 전환")
+                        if close_result:
+                            long_close_list.append(close_result)
+                        open_result = open_short_position(short_config)
+                        if open_result:
+                            short_open_list.append(open_result)
+                            active_position_map[symbol] = 'short'
                     else:
-                        # 조건 미충족 시 청산
-                        if has_long:
-                            if short_filter_active:
-                                reason = "숏 필터 활성 (하락 추세)"
-                            else:
-                                reason = "롱 신호 미충족"
-                            result = close_long_position(symbol, reason)
-                            if result:
-                                long_close_list.append(result)
-                                if symbol in active_position_map:
-                                    del active_position_map[symbol]
-                        else:
-                            logging.info(f"[롱][{symbol}] ➡️ 현금 유지 (롱 조건 미충족)")
+                        # 현금 → 숏 진입
+                        result = open_short_position(short_config)
+                        if result:
+                            short_open_list.append(result)
+                            active_position_map[symbol] = 'short'
 
-                except Exception as e:
-                    errors.append(f"Futures 롱 {symbol} 처리 중 오류: {e}")
-                    logging.error(f"Futures 롱 {symbol} 처리 중 오류: {e}")
+                elif final_long_condition:
+                    # 롱 신호 ON (숏 신호 OFF)
+                    if current_side == 'long':
+                        logging.info(f"[{symbol}] ➡️ 롱 포지션 유지")
+                    elif current_side == 'short':
+                        # 숏 청산 → 롱 진입
+                        logging.info(f"[{symbol}] 🔄 숏→롱 전환: 숏 청산 후 롱 진입")
+                        close_result = close_short_position(symbol, "롱 신호 발생 - 포지션 전환")
+                        if close_result:
+                            short_close_list.append(close_result)
+                        open_result = open_long_position(long_config)
+                        if open_result:
+                            long_open_list.append(open_result)
+                            active_position_map[symbol] = 'long'
+                    else:
+                        # 현금 → 롱 진입
+                        result = open_long_position(long_config)
+                        if result:
+                            long_open_list.append(result)
+                            active_position_map[symbol] = 'long'
+
+                else:
+                    # 둘 다 OFF → 기존 포지션 청산
+                    if current_side == 'short':
+                        reason = "MA 조건 미충족" if not short_ma_condition else "스토캐스틱 조건 미충족"
+                        result = close_short_position(symbol, reason)
+                        if result:
+                            short_close_list.append(result)
+                            if symbol in active_position_map:
+                                del active_position_map[symbol]
+                    elif current_side == 'long':
+                        if short_filter_active:
+                            reason = "숏 필터 활성 (하락 추세)"
+                        else:
+                            reason = "롱 신호 미충족"
+                        result = close_long_position(symbol, reason)
+                        if result:
+                            long_close_list.append(result)
+                            if symbol in active_position_map:
+                                del active_position_map[symbol]
+                    else:
+                        logging.info(f"[{symbol}] ➡️ 현금 유지")
+
+            except Exception as e:
+                errors.append(f"Futures {symbol} 처리 중 오류: {e}")
+                logging.error(f"Futures {symbol} 처리 중 오류: {e}")
 
     except Exception as e:
         logging.error(f"Futures 전략 실행 중 오류: {e}")
