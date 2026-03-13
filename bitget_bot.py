@@ -1,15 +1,15 @@
 """
 ================================================================================
-Bitget Futures 메이저 코인 자동매매 봇 v1.0
+Bitget Futures 메이저 코인 자동매매 봇 v2.0
 (Binance 신호 + Bitget 매매) + 텔레그램 알림
 ================================================================================
 - 대상: BTC, ETH, XRP, SOL, DOGE, ADA (6개)
 - 신호 데이터: Binance Futures 공개 API (API 키 불필요)
 - 매매 실행: Bitget Futures API (헤지 모드)
-- 전략: 롱 우선, 숏 보조 (각각 독립 파라미터)
+- 전략: 코인별 우선순위 (롱우선 or 숏우선, 각각 독립 파라미터)
   - 롱 조건: 시가 > MA_long(4H) AND K_long > D_long(1D) → 롱 진입
-  - 숏 조건: 시가 < MA_short(4H) AND K_short < D_short(1D) → 숏 진입 (롱 미충족 시)
-  - 충돌 시 롱 우선 (숏 청산 후 롱 진입)
+  - 숏 조건: 시가 < MA_short(4H) AND K_short < D_short(1D) → 숏 진입
+  - 충돌 시 코인별 priority에 따라 우선방향 선택
 - 자금 배분: 6코인 균등배분 (각 16.7%)
 - 지정가 5회 실패 시 시장가 전환
 - 텔레그램 실시간 알림
@@ -37,10 +37,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 📌 트레이딩 설정 (백테스트 최적화 결과)
+# 📌 트레이딩 설정 (백테스트 최적화 결과 v2 - 코인별 롱우선/숏우선)
 # ═══════════════════════════════════════════════════════════════════════════════
-# 롱/숏 파라미터 독립 최적화 결과 (optimize_major_coins.py)
-# 전략: 롱 우선, 숏 보조
+# 롱/숏 파라미터 독립 최적화 + 코인별 priority 결과
+# (optimize_all_coins_long_vs_short.py → compare_old_vs_new_params.py)
+# priority='long': 롱 조건 우선 확인, priority='short': 숏 조건 우선 확인
 
 TRADING_CONFIGS = [
     {
@@ -51,11 +52,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.1,
         'size_decimals': 3,
-        # 롱 파라미터
-        'long_ma': 219, 'long_sk': 27, 'long_sks': 33, 'long_sd': 4, 'long_lev': 5,
-        # 숏 파라미터
-        'short_ma': 247, 'short_sk': 35, 'short_sks': 52, 'short_sd': 29, 'short_lev': 1,
-        # 백테스트: Long CAGR 316.9%, Combined CAGR 365.9%, MDD -84.5%
+        'priority': 'short',  # 숏우선 (Winner: SF)
+        # 롱 파라미터 (보조)
+        'long_ma': 350, 'long_sk': 36, 'long_sks': 32, 'long_sd': 10, 'long_lev': 5,
+        # 숏 파라미터 (우선)
+        'short_ma': 254, 'short_sk': 27, 'short_sks': 23, 'short_sd': 19, 'short_lev': 1,
     },
     {
         'enabled': True,
@@ -65,9 +66,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.01,
         'size_decimals': 2,
-        'long_ma': 152, 'long_sk': 19, 'long_sks': 28, 'long_sd': 14, 'long_lev': 5,
-        'short_ma': 248, 'short_sk': 53, 'short_sks': 40, 'short_sd': 11, 'short_lev': 2,
-        # 백테스트: Long CAGR 778.1%, Combined CAGR 903.8%, MDD -73.5%
+        'priority': 'long',  # 롱우선 (Winner: LF)
+        # 롱 파라미터 (우선)
+        'long_ma': 322, 'long_sk': 54, 'long_sks': 10, 'long_sd': 36, 'long_lev': 5,
+        # 숏 파라미터 (보조)
+        'short_ma': 220, 'short_sk': 31, 'short_sks': 44, 'short_sd': 26, 'short_lev': 2,
     },
     {
         'enabled': True,
@@ -77,9 +80,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.0001,
         'size_decimals': 1,
-        'long_ma': 337, 'long_sk': 16, 'long_sks': 12, 'long_sd': 14, 'long_lev': 4,
-        'short_ma': 37, 'short_sk': 116, 'short_sks': 60, 'short_sd': 20, 'short_lev': 1,
-        # 백테스트: Long CAGR 265.7%, Combined CAGR 348.1%, MDD -85.5%
+        'priority': 'short',  # 숏우선 (Winner: SF)
+        # 롱 파라미터 (보조)
+        'long_ma': 107, 'long_sk': 14, 'long_sks': 13, 'long_sd': 23, 'long_lev': 5,
+        # 숏 파라미터 (우선)
+        'short_ma': 269, 'short_sk': 121, 'short_sks': 35, 'short_sd': 47, 'short_lev': 1,
     },
     {
         'enabled': True,
@@ -89,9 +94,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.001,
         'size_decimals': 1,
-        'long_ma': 284, 'long_sk': 37, 'long_sks': 15, 'long_sd': 36, 'long_lev': 3,
-        'short_ma': 65, 'short_sk': 39, 'short_sks': 28, 'short_sd': 50, 'short_lev': 1,
-        # 백테스트: Long CAGR 747.6%, Combined CAGR 1011.4%, MDD -76.4%
+        'priority': 'long',  # 롱우선 (Winner: LF)
+        # 롱 파라미터 (우선)
+        'long_ma': 73, 'long_sk': 33, 'long_sks': 16, 'long_sd': 38, 'long_lev': 4,
+        # 숏 파라미터 (보조)
+        'short_ma': 314, 'short_sk': 37, 'short_sks': 34, 'short_sd': 44, 'short_lev': 1,
     },
     {
         'enabled': True,
@@ -101,9 +108,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.00001,
         'size_decimals': 0,
-        'long_ma': 236, 'long_sk': 36, 'long_sks': 34, 'long_sd': 50, 'long_lev': 2,
-        'short_ma': 101, 'short_sk': 83, 'short_sks': 17, 'short_sd': 6, 'short_lev': 2,
-        # 백테스트: Long CAGR 251.2%, Combined CAGR 435.4%, MDD -80.8%
+        'priority': 'short',  # 숏우선 (Winner: SF)
+        # 롱 파라미터 (보조)
+        'long_ma': 31, 'long_sk': 48, 'long_sks': 50, 'long_sd': 17, 'long_lev': 2,
+        # 숏 파라미터 (우선)
+        'short_ma': 250, 'short_sk': 36, 'short_sks': 15, 'short_sd': 40, 'short_lev': 1,
     },
     {
         'enabled': True,
@@ -113,9 +122,11 @@ TRADING_CONFIGS = [
         'timeframe': '4H',
         'tick_size': 0.0001,
         'size_decimals': 0,
-        'long_ma': 113, 'long_sk': 91, 'long_sks': 45, 'long_sd': 14, 'long_lev': 3,
-        'short_ma': 216, 'short_sk': 107, 'short_sks': 23, 'short_sd': 19, 'short_lev': 1,
-        # 백테스트: Long CAGR 218.6%, Combined CAGR 280.9%, MDD -79.5%
+        'priority': 'short',  # 숏우선 (Winner: SF)
+        # 롱 파라미터 (보조)
+        'long_ma': 296, 'long_sk': 19, 'long_sks': 53, 'long_sd': 15, 'long_lev': 3,
+        # 숏 파라미터 (우선)
+        'short_ma': 80, 'short_sk': 31, 'short_sks': 77, 'short_sd': 46, 'short_lev': 1,
     },
 ]
 
@@ -279,14 +290,15 @@ def send_trading_summary(total_equity: float, available: float):
 
 
 def send_bot_start_alert(configs, total_equity):
-    msg = f"🚀 <b>Bitget Major Bot v1.0 시작</b>\n"
+    msg = f"🚀 <b>Bitget Major Bot v2.0 시작</b>\n"
     msg += f"{'─' * 30}\n"
     msg += f"💰 총자산: ${total_equity:,.2f}\n"
-    msg += f"📊 전략: 롱 우선 + 숏 보조 (독립 파라미터)\n"
+    msg += f"📊 전략: 코인별 롱우선/숏우선 (독립 파라미터)\n"
     msg += f"🪙 코인: {len(configs)}개 균등배분 (각 {100/max(len(configs),1):.1f}%)\n\n"
 
     for c in configs:
-        msg += f"  {c['symbol']}: L{c['long_lev']}x/S{c['short_lev']}x "
+        pri = '롱우선' if c.get('priority', 'long') == 'long' else '숏우선'
+        msg += f"  {c['symbol']}: [{pri}] L{c['long_lev']}x/S{c['short_lev']}x "
         msg += f"LMA{c['long_ma']} SMA{c['short_ma']}\n"
 
     msg += f"\n📡 신호: Binance | 매매: Bitget"
@@ -703,6 +715,9 @@ class TradingBot:
         self.short_sd = config['short_sd']
         self.short_lev = config['short_lev']
 
+        # 우선순위 (코인별 롱우선/숏우선)
+        self.priority = config.get('priority', 'long')  # 'long' or 'short'
+
         # 스토캐스틱 캐시 (롱/숏 각각)
         self._stoch_cache_long = {'utc_date': None, 'is_bull': False, 'k': 0.0, 'd': 0.0}
         self._stoch_cache_short = {'utc_date': None, 'is_bear': False, 'k': 0.0, 'd': 0.0}
@@ -1062,26 +1077,20 @@ class TradingBot:
         logger.info(f"[{self.symbol}] 📊 숏 Stoch({self.short_sk},{self.short_sks},{self.short_sd}): K={k:.2f}, D={d:.2f} → {'하락' if is_bear else '상승'}")
         return is_bear, k, d
 
-    # ── 최종 액션 결정 (롱 우선) ──
+    # ── 최종 액션 결정 (코인별 우선순위) ──
 
-    def get_final_action(self):
-        """
-        Returns: (action, leverage, side)
-          action: 'LONG', 'SHORT', 'CASH'
-          leverage: 목표 레버리지
-          side: 'long', 'short', None
-        """
-        # 1. 롱 조건: 시가 > MA_long AND K_long > D_long
+    def _check_long_condition(self):
+        """롱 조건 확인. Returns: (충족여부, leverage) or (False, 0)"""
         df_long = self.signal_client.get_candles(self.symbol, self.timeframe, self.long_ma + 10)
         if df_long is None or df_long.empty or len(df_long) < self.long_ma:
             logger.warning(f"[{self.symbol}] 롱 캔들 조회 실패")
-            return ('CASH', 0, None)
+            return False, 0
 
         ma_long = df_long['close'].rolling(window=self.long_ma).mean().iloc[-1]
         open_price = df_long.iloc[-1]['open']
 
         if pd.isna(ma_long):
-            return ('CASH', 0, None)
+            return False, 0
 
         ma_long_signal = open_price > ma_long
         is_bull, k_long, d_long = self.get_long_stochastic()
@@ -1090,35 +1099,82 @@ class TradingBot:
                      f"K={k_long:.2f} {'>' if is_bull else '<='} D={d_long:.2f}")
 
         if ma_long_signal and is_bull:
-            logger.info(f"[{self.symbol}] ✅ 롱 조건 충족 → Long {self.long_lev}x")
-            return ('LONG', self.long_lev, 'long')
+            return True, self.long_lev
+        return False, 0
 
-        # 2. 숏 조건: 시가 < MA_short AND K_short < D_short
+    def _check_short_condition(self):
+        """숏 조건 확인. Returns: (충족여부, leverage) or (False, 0)"""
         df_short = self.signal_client.get_candles(self.symbol, self.timeframe, self.short_ma + 10)
-        if df_short is not None and not df_short.empty and len(df_short) >= self.short_ma:
-            ma_short = df_short['close'].rolling(window=self.short_ma).mean().iloc[-1]
-            open_price_short = df_short.iloc[-1]['open']
+        if df_short is None or df_short.empty or len(df_short) < self.short_ma:
+            logger.warning(f"[{self.symbol}] 숏 캔들 조회 실패")
+            return False, 0
 
-            if not pd.isna(ma_short):
-                ma_short_signal = open_price_short < ma_short
-                is_bear, k_short, d_short = self.get_short_stochastic()
+        ma_short = df_short['close'].rolling(window=self.short_ma).mean().iloc[-1]
+        open_price_short = df_short.iloc[-1]['open']
 
-                logger.info(f"[{self.symbol}] 📊 숏: 시가 {open_price_short:.4f} {'<' if ma_short_signal else '>='} MA{self.short_ma} {ma_short:.4f}, "
-                             f"K={k_short:.2f} {'<' if is_bear else '>='} D={d_short:.2f}")
+        if pd.isna(ma_short):
+            return False, 0
 
-                if ma_short_signal and is_bear:
-                    logger.info(f"[{self.symbol}] ✅ 숏 조건 충족 → Short {self.short_lev}x")
-                    return ('SHORT', self.short_lev, 'short')
+        ma_short_signal = open_price_short < ma_short
+        is_bear, k_short, d_short = self.get_short_stochastic()
 
-        # 3. 둘 다 미충족
+        logger.info(f"[{self.symbol}] 📊 숏: 시가 {open_price_short:.4f} {'<' if ma_short_signal else '>='} MA{self.short_ma} {ma_short:.4f}, "
+                     f"K={k_short:.2f} {'<' if is_bear else '>='} D={d_short:.2f}")
+
+        if ma_short_signal and is_bear:
+            return True, self.short_lev
+        return False, 0
+
+    def get_final_action(self):
+        """
+        코인별 priority에 따라 우선 방향을 먼저 확인.
+        - priority='long': 롱 조건 먼저 → 미충족 시 숏 조건 확인
+        - priority='short': 숏 조건 먼저 → 미충족 시 롱 조건 확인
+
+        Returns: (action, leverage, side)
+          action: 'LONG', 'SHORT', 'CASH'
+          leverage: 목표 레버리지
+          side: 'long', 'short', None
+        """
+        priority_label = '롱우선' if self.priority == 'long' else '숏우선'
+        logger.info(f"[{self.symbol}] 🔀 전략: {priority_label}")
+
+        if self.priority == 'long':
+            # 1차: 롱 조건 확인
+            long_met, long_lev = self._check_long_condition()
+            if long_met:
+                logger.info(f"[{self.symbol}] ✅ 롱 조건 충족 → Long {long_lev}x")
+                return ('LONG', long_lev, 'long')
+
+            # 2차: 숏 조건 확인 (롱 미충족 시)
+            short_met, short_lev = self._check_short_condition()
+            if short_met:
+                logger.info(f"[{self.symbol}] ✅ 숏 조건 충족 → Short {short_lev}x")
+                return ('SHORT', short_lev, 'short')
+
+        else:  # priority == 'short'
+            # 1차: 숏 조건 확인
+            short_met, short_lev = self._check_short_condition()
+            if short_met:
+                logger.info(f"[{self.symbol}] ✅ 숏 조건 충족 → Short {short_lev}x")
+                return ('SHORT', short_lev, 'short')
+
+            # 2차: 롱 조건 확인 (숏 미충족 시)
+            long_met, long_lev = self._check_long_condition()
+            if long_met:
+                logger.info(f"[{self.symbol}] ✅ 롱 조건 충족 → Long {long_lev}x")
+                return ('LONG', long_lev, 'long')
+
+        # 둘 다 미충족
         logger.info(f"[{self.symbol}] ❌ 롱/숏 미충족 → 현금")
         return ('CASH', 0, None)
 
     # ── 상태 표시 ──
 
     def show_status(self):
+        priority_label = '롱우선' if self.priority == 'long' else '숏우선'
         logger.info(f"\n{'='*60}")
-        logger.info(f"📊 [{self.symbol}] (Binance 신호 → Bitget 매매)")
+        logger.info(f"📊 [{self.symbol}] (Binance 신호 → Bitget 매매) [{priority_label}]")
         logger.info(f"   L{self.long_lev}x MA{self.long_ma} Stoch({self.long_sk},{self.long_sks},{self.long_sd})")
         logger.info(f"   S{self.short_lev}x MA{self.short_ma} Stoch({self.short_sk},{self.short_sks},{self.short_sd})")
         logger.info(f"{'='*60}")
@@ -1159,9 +1215,10 @@ class TradingBot:
         logger.info(f"[{self.symbol}] 🎯 목표: {action} ({lev_desc})")
 
         # 액션 실행
+        priority_label = '롱우선' if self.priority == 'long' else '숏우선'
         if action == 'LONG':
             if has_short:
-                logger.info(f"[{self.symbol}] 📉 숏 청산 (롱 전환)")
+                logger.info(f"[{self.symbol}] 📉 숏 청산 (롱 전환) [{priority_label}]")
                 self.safe_limit_close(side='short', reason="롱 전환")
                 time.sleep(1)
 
