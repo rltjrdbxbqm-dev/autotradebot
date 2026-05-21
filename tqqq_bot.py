@@ -1,13 +1,29 @@
 """
 ================================================================================
-TQQQ Sniper 텔레그램 알림 봇 v1.1.0 (서버 점검 시 자동 복구)
+TQQQ Sniper 텔레그램 알림 봇 v1.2.0 (동적 MA 전략)
 ================================================================================
 - TQQQ 가격 및 시그널 분석
 - 매일 지정된 시간에 텔레그램 알림 전송
 - 시그널 변경 시 알림
 - [v1.1.0] API 실패 시 다음 스케줄에 자동 재시도
+- [v1.2.0] k<d 구간 동적 MA 2개 선택 전략 적용
 ================================================================================
 """
+
+import sys
+import typing
+
+if sys.version_info < (3, 10) and hasattr(typing, '_GenericAlias'):
+    # yfinance 0.2.60 uses Python 3.10 union annotations during import.
+    # This keeps the bot runnable in the existing Python 3.9 conda setup.
+    def _generic_alias_or(self, other):
+        return typing.Union[self, other]
+
+    def _generic_alias_ror(self, other):
+        return typing.Union[other, self]
+
+    typing._GenericAlias.__or__ = _generic_alias_or
+    typing._GenericAlias.__ror__ = _generic_alias_ror
 
 import yfinance as yf
 import pandas as pd
@@ -19,7 +35,11 @@ import time
 import logging
 import os
 import signal
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        return False
 
 # .env 파일 로드
 load_dotenv()
@@ -122,18 +142,21 @@ def send_telegram(message: str) -> bool:
 
 class TQQQAnalyzer:
     def __init__(self):
-        # 나스닥100 기반 베이지안 최적화 결과 (CAGR 31.4%, Sharpe 0.86)
-        self.stoch_config = {'period': 112, 'k_period': 78, 'd_period': 38}
-        self.ma_periods = [19, 49, 192, 266]
+        # 나스닥100 기반 동적 MA 전략 최적화 결과
+        # CAGR 31.91%, Sharpe 0.833, MDD -63.47%, Calmar 0.503
+        self.stoch_config = {'period': 128, 'k_period': 92, 'd_period': 86}
+        self.ma_periods = [31, 84, 263, 315]
 
-    def get_data(self, days_back=600):
-        """TQQQ 데이터 가져오기 (MA266 + Stoch 계산에 충분한 기간)"""
+    def get_data(self, days_back=None):
+        """TQQQ 데이터 가져오기 (동적 상태 추적을 위해 기본값은 상장 이후 최대기간)"""
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
+        start_date = end_date - timedelta(days=days_back) if days_back else None
         try:
             # timeout wrapper 적용
             def fetch_data():
                 ticker = yf.Ticker('TQQQ')
+                if start_date is None:
+                    return ticker.history(period='max', auto_adjust=True)
                 return ticker.history(start=start_date, end=end_date, auto_adjust=True)
             
             data = call_with_timeout(fetch_data, timeout=60)
@@ -171,6 +194,101 @@ class TQQQAnalyzer:
         
         return df.dropna()
 
+    def _fallback_two_closest(self, price, ma_values, selected):
+        """부족한 MA를 현재가와 가까운 순서로 채운다."""
+        selected = list(selected)
+        for idx in np.argsort(np.abs(ma_values - price)):
+            idx = int(idx)
+            if idx not in selected:
+                selected.append(idx)
+            if len(selected) >= 2:
+                break
+        return selected[:2]
+
+    def _calculate_dynamic_allocations(self, data):
+        """
+        동적 MA 2개 선택 전략을 전체 데이터에 순차 적용한다.
+
+        k>d:
+          4개 MA 충족 수를 25%씩 반영.
+        k<d:
+          전일 선정 MA쌍을 당일 종가로 판정한다.
+          0%권  -> 현재가 위 근접 MA 2개 고정 추적, 1개 돌파=50%, 2개 돌파=100%
+          50%권 -> 현재가 위/아래 근접 MA 1개씩 새로 선택
+          100%권 -> 현재가 아래 근접 MA 2개 고정 추적, 1개 이탈=50%, 2개 이탈=0%
+        """
+        ratios = []
+        selected_periods = []
+        selected_modes = []
+        prev_target = 0.0
+        active_pair = None
+        active_mode = None
+
+        ma_cols = [f'MA{p}' for p in self.ma_periods]
+
+        def select_pair_for_next(target, price, ma_values, current_pair=None, current_mode=None):
+            """오늘 종가 기준으로 다음 거래일에 판정할 MA쌍을 고른다."""
+            if target <= 0.0:
+                if current_mode == "resistance" and current_pair is not None:
+                    return current_pair, current_mode
+                above = np.where(ma_values > price)[0]
+                above = sorted(above, key=lambda idx: ma_values[idx] - price)
+                return self._fallback_two_closest(price, ma_values, above[:2]), "resistance"
+
+            if target >= 1.0:
+                if current_mode == "support" and current_pair is not None:
+                    return current_pair, current_mode
+                below = np.where(ma_values < price)[0]
+                below = sorted(below, key=lambda idx: price - ma_values[idx])
+                return self._fallback_two_closest(price, ma_values, below[:2]), "support"
+
+            above = np.where(ma_values > price)[0]
+            below = np.where(ma_values < price)[0]
+            selected = []
+            if len(above) > 0:
+                selected.append(int(min(above, key=lambda idx: ma_values[idx] - price)))
+            if len(below) > 0:
+                selected.append(int(min(below, key=lambda idx: price - ma_values[idx])))
+            return self._fallback_two_closest(price, ma_values, selected), "balanced"
+
+        mode_labels = {
+            "resistance": "0%: 위 근접 MA 2개",
+            "balanced": "50%: 위/아래 근접 MA 1개씩",
+            "support": "100%: 아래 근접 MA 2개",
+        }
+
+        for _, row in data.iterrows():
+            price = row['Close']
+            ma_values = row[ma_cols].to_numpy(dtype=float)
+            is_bullish = row['%K'] > row['%D']
+
+            if is_bullish:
+                target = sum(price > ma for ma in ma_values) * 0.25
+                selected = []
+                mode = "BULLISH: 4개 MA 조건 수"
+            else:
+                if active_pair is None:
+                    active_pair, active_mode = select_pair_for_next(prev_target, price, ma_values)
+                selected = active_pair
+                mode = mode_labels.get(active_mode, "동적 MA쌍")
+                hit_count = sum(price > ma_values[idx] for idx in active_pair)
+                target = hit_count * 0.5
+
+            active_pair, active_mode = select_pair_for_next(
+                target, price, ma_values, active_pair, active_mode
+            )
+
+            ratios.append(target)
+            selected_periods.append([self.ma_periods[idx] for idx in selected])
+            selected_modes.append(mode)
+            prev_target = target
+
+        return (
+            pd.Series(ratios, index=data.index),
+            pd.Series(selected_periods, index=data.index),
+            pd.Series(selected_modes, index=data.index)
+        )
+
     def analyze(self, data):
         """시그널 분석"""
         curr = data.iloc[-1]
@@ -178,22 +296,12 @@ class TQQQAnalyzer:
         
         is_bullish = curr['%K'] > curr['%D']
         ma_signals = {p: curr['Close'] > curr[f'MA{p}'] for p in self.ma_periods}
-        
-        # 현재 비중 계산
-        if is_bullish:
-            tqqq_ratio = sum(ma_signals.values()) * 0.25
-        else:
-            tqqq_ratio = (int(ma_signals[19]) + int(ma_signals[49])) * 0.5
+
+        allocations, selected_mas, selected_modes = self._calculate_dynamic_allocations(data)
+        tqqq_ratio = allocations.iloc[-1]
         
         cash_ratio = 1 - tqqq_ratio
-        
-        # 전일 비중
-        prev_bullish = prev['%K'] > prev['%D']
-        prev_ma = {p: prev['Close'] > prev[f'MA{p}'] for p in self.ma_periods}
-        if prev_bullish:
-            prev_tqqq = sum(prev_ma.values()) * 0.25
-        else:
-            prev_tqqq = (int(prev_ma[19]) + int(prev_ma[49])) * 0.5
+        prev_tqqq = allocations.iloc[-2]
         
         change = tqqq_ratio - prev_tqqq
         
@@ -211,6 +319,10 @@ class TQQQAnalyzer:
             'stoch_k': curr['%K'],
             'stoch_d': curr['%D'],
             'deviations': {p: curr[f'Dev{p}'] for p in self.ma_periods},
+            'selected_mas': selected_mas.iloc[-1],
+            'selected_mode': selected_modes.iloc[-1],
+            'ma_periods': self.ma_periods,
+            'strategy': '동적 MA 전략',
             'date': curr.name
         }
 
@@ -265,10 +377,18 @@ def create_alert_message(result: dict) -> str:
     regime_text = 'BULLISH (K > D)' if r['is_bullish'] else 'BEARISH (K < D)'
     
     # MA 시그널
-    ma19 = '✅' if r['ma_signals'][19] else '❌'
-    ma49 = '✅' if r['ma_signals'][49] else '❌'
-    ma192 = '✅' if r['ma_signals'][192] else '❌'
-    ma266 = '✅' if r['ma_signals'][266] else '❌'
+    ma_items = [
+        f"MA{p}: {'✅' if r['ma_signals'][p] else '❌'}"
+        for p in r['ma_periods']
+    ]
+    ma_lines = "   " + " | ".join(ma_items[:2])
+    if len(ma_items) > 2:
+        ma_lines += "\n   " + " | ".join(ma_items[2:])
+
+    if r['selected_mas']:
+        selected_line = "   기준 MA: " + ", ".join(f"MA{p}" for p in r['selected_mas'])
+    else:
+        selected_line = "   기준 MA: 4개 MA 조건 수"
     
     # 메시지 생성
     msg = f"""⚡ TQQQ SNIPER
@@ -292,8 +412,11 @@ def create_alert_message(result: dict) -> str:
    K: {r['stoch_k']:.1f} / D: {r['stoch_d']:.1f}
 
 📡 MA 시그널
-   MA19: {ma19} | MA49: {ma49}
-   MA192: {ma192} | MA266: {ma266}
+{ma_lines}
+
+🎯 동적 기준
+   {r['selected_mode']}
+{selected_line}
 ━━━━━━━━━━━━━━━
 """
     return msg
@@ -339,8 +462,8 @@ def send_tqqq_alert():
 
 def main():
     logger.info("=" * 50)
-    logger.info("TQQQ Sniper 텔레그램 알림 봇 v1.1.0 시작")
-    logger.info("(서버 점검 시 자동 복구 기능 적용)")
+    logger.info("TQQQ Sniper 텔레그램 알림 봇 v1.2.0 시작")
+    logger.info("(동적 MA 전략 + 서버 점검 시 자동 복구 기능 적용)")
     logger.info("=" * 50)
     
     # 시작 시 즉시 한 번 실행 (잘 돌아가는지 확인용)
