@@ -1,11 +1,12 @@
 """
 ================================================================================
-바이낸스 Futures 자동매매 봇 v5.0.0 (USDS-M Futures 숏+롱 전용)
+바이낸스 Futures 자동매매 봇 v6.0.0 (USDS-M Futures 숏+롱 코인별 우선순위)
 ================================================================================
+- 코인별 롱/숏 우선순위 적용 (롱우선: 롱→숏 순, 숏우선: 숏→롱 순)
 - USDS-M Futures 숏 포지션: 가격 < MA AND K < D → 숏 진입
 - USDS-M Futures 롱 포지션: NOT 숏필터 AND 가격 > MA AND K > D → 롱 진입
 - Futures BNB 자동 충전 (수수료 할인용, Spot 거래소 경유)
-- 포지션 사이징: 총 자산 / 숏 코인 수(289) 기준 균등 배분
+- 포지션 사이징: 총 자산 / 숏 코인 수 기준 균등 배분
 - 서버 점검 시 자동 복구: API 실패 시 다음 스케줄에 자동 재시도
 ================================================================================
 """
@@ -75,6 +76,10 @@ FUTURES_MIN_ORDER_USDT = 6  # Futures 최소 주문 금액
 FUTURES_BNB_MIN_BALANCE = 10  # Futures 지갑 BNB 최소 보유량 (USDT 기준)
 FUTURES_BNB_RECHARGE_AMOUNT = 20  # 충전 시 매수할 금액 (USDT)
 
+# Spot USDT 자동 충전 설정 (Futures → Spot 전송)
+SPOT_USDT_MIN_BALANCE = 100  # Spot 지갑 USDT 최소 보유량
+SPOT_USDT_REFILL_AMOUNT = 100  # 충전 시 Futures에서 Spot으로 전송할 금액 (USDT)
+
 # 종료 알림 관련 전역 변수
 # ============================================================
 
@@ -83,551 +88,897 @@ SHUTDOWN_SENT = False
 
 
 # ============================================================
-# USDS-M Futures 숏 포지션 설정 (optimize_short_fixed.py 결과 2026-02-08)
+# USDS-M Futures 숏 포지션 설정 (롱/숏 우선 최적화 반영 2026-04-30)
 # ============================================================
-# 총 315개 코인 분석, 289개 적합 코인 선정 (CAGR >= 25%)
+# CSV 최적화 결과 반영: 코인별 롱우선/숏우선 Winner 파라미터 적용
+# 최적화 미완료 코인은 기존 파라미터 유지 (기본 숏우선)
 # 비용 반영: 수수료 0.04%, 슬리피지 0.05%, 펀딩비 0.01%/8h
 # ============================================================
 
 SHORT_TRADING_CONFIGS = [
-    {'symbol': 'SUSDT', 'ma_period': 141, 'stoch_k_period': 145, 'stoch_k_smooth': 77, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'SOLVUSDT', 'ma_period': 242, 'stoch_k_period': 150, 'stoch_k_smooth': 64, 'stoch_d_period': 21, 'leverage': 5},
-    {'symbol': 'RAYSOLUSDT', 'ma_period': 165, 'stoch_k_period': 149, 'stoch_k_smooth': 57, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'BERAUSDT', 'ma_period': 32, 'stoch_k_period': 117, 'stoch_k_smooth': 52, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'DUSDT', 'ma_period': 325, 'stoch_k_period': 145, 'stoch_k_smooth': 57, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'CGPTUSDT', 'ma_period': 112, 'stoch_k_period': 150, 'stoch_k_smooth': 60, 'stoch_d_period': 27, 'leverage': 5},
-    {'symbol': '1000000MOGUSDT', 'ma_period': 144, 'stoch_k_period': 115, 'stoch_k_smooth': 77, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'VELODROMEUSDT', 'ma_period': 346, 'stoch_k_period': 145, 'stoch_k_smooth': 59, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'PENGUUSDT', 'ma_period': 102, 'stoch_k_period': 150, 'stoch_k_smooth': 80, 'stoch_d_period': 47, 'leverage': 4},
-    {'symbol': 'AIXBTUSDT', 'ma_period': 132, 'stoch_k_period': 140, 'stoch_k_smooth': 22, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'MEUSDT', 'ma_period': 140, 'stoch_k_period': 27, 'stoch_k_smooth': 17, 'stoch_d_period': 10, 'leverage': 5},
-    {'symbol': 'SONICUSDT', 'ma_period': 85, 'stoch_k_period': 142, 'stoch_k_smooth': 46, 'stoch_d_period': 38, 'leverage': 5},
-    {'symbol': 'AEROUSDT', 'ma_period': 30, 'stoch_k_period': 148, 'stoch_k_smooth': 63, 'stoch_d_period': 34, 'leverage': 4},
-    {'symbol': 'FARTCOINUSDT', 'ma_period': 188, 'stoch_k_period': 123, 'stoch_k_smooth': 61, 'stoch_d_period': 6, 'leverage': 5},
-    {'symbol': 'CETUSUSDT', 'ma_period': 170, 'stoch_k_period': 21, 'stoch_k_smooth': 41, 'stoch_d_period': 20, 'leverage': 5},
-    {'symbol': 'VTHOUSDT', 'ma_period': 120, 'stoch_k_period': 143, 'stoch_k_smooth': 67, 'stoch_d_period': 27, 'leverage': 5},
-    {'symbol': 'PNUTUSDT', 'ma_period': 155, 'stoch_k_period': 122, 'stoch_k_smooth': 53, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'VINEUSDT', 'ma_period': 227, 'stoch_k_period': 88, 'stoch_k_smooth': 76, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'MOVEUSDT', 'ma_period': 48, 'stoch_k_period': 59, 'stoch_k_smooth': 62, 'stoch_d_period': 33, 'leverage': 5},
-    {'symbol': 'MEWUSDT', 'ma_period': 54, 'stoch_k_period': 113, 'stoch_k_smooth': 46, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'PHAUSDT', 'ma_period': 205, 'stoch_k_period': 148, 'stoch_k_smooth': 80, 'stoch_d_period': 45, 'leverage': 5},
-    {'symbol': 'VIRTUALUSDT', 'ma_period': 156, 'stoch_k_period': 108, 'stoch_k_smooth': 36, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'TRUMPUSDT', 'ma_period': 54, 'stoch_k_period': 144, 'stoch_k_smooth': 79, 'stoch_d_period': 17, 'leverage': 5},
-    {'symbol': '1000CATUSDT', 'ma_period': 41, 'stoch_k_period': 42, 'stoch_k_smooth': 13, 'stoch_d_period': 16, 'leverage': 4},
-    {'symbol': 'ZKUSDT', 'ma_period': 84, 'stoch_k_period': 95, 'stoch_k_smooth': 57, 'stoch_d_period': 41, 'leverage': 5},
-    {'symbol': 'DEXEUSDT', 'ma_period': 86, 'stoch_k_period': 150, 'stoch_k_smooth': 37, 'stoch_d_period': 24, 'leverage': 5},
-    {'symbol': 'GOATUSDT', 'ma_period': 185, 'stoch_k_period': 119, 'stoch_k_smooth': 50, 'stoch_d_period': 37, 'leverage': 5},
-    {'symbol': 'EIGENUSDT', 'ma_period': 37, 'stoch_k_period': 145, 'stoch_k_smooth': 79, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'VANRYUSDT', 'ma_period': 115, 'stoch_k_period': 148, 'stoch_k_smooth': 60, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'COOKIEUSDT', 'ma_period': 144, 'stoch_k_period': 120, 'stoch_k_smooth': 57, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'BOMEUSDT', 'ma_period': 93, 'stoch_k_period': 148, 'stoch_k_smooth': 54, 'stoch_d_period': 37, 'leverage': 5},
-    {'symbol': 'SWARMSUSDT', 'ma_period': 175, 'stoch_k_period': 141, 'stoch_k_smooth': 71, 'stoch_d_period': 31, 'leverage': 5},
-    {'symbol': 'SYNUSDT', 'ma_period': 129, 'stoch_k_period': 107, 'stoch_k_smooth': 25, 'stoch_d_period': 25, 'leverage': 5},
-    {'symbol': 'DEGENUSDT', 'ma_period': 70, 'stoch_k_period': 150, 'stoch_k_smooth': 57, 'stoch_d_period': 16, 'leverage': 5},
-    {'symbol': 'HIVEUSDT', 'ma_period': 293, 'stoch_k_period': 150, 'stoch_k_smooth': 76, 'stoch_d_period': 33, 'leverage': 5},
-    {'symbol': 'BIOUSDT', 'ma_period': 272, 'stoch_k_period': 39, 'stoch_k_smooth': 6, 'stoch_d_period': 45, 'leverage': 5},
-    {'symbol': '1MBABYDOGEUSDT', 'ma_period': 76, 'stoch_k_period': 79, 'stoch_k_smooth': 9, 'stoch_d_period': 7, 'leverage': 5},
-    {'symbol': 'ACXUSDT', 'ma_period': 346, 'stoch_k_period': 134, 'stoch_k_smooth': 80, 'stoch_d_period': 49, 'leverage': 5},
-    {'symbol': 'SYSUSDT', 'ma_period': 162, 'stoch_k_period': 64, 'stoch_k_smooth': 5, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'VVVUSDT', 'ma_period': 129, 'stoch_k_period': 104, 'stoch_k_smooth': 73, 'stoch_d_period': 36, 'leverage': 5},
-    {'symbol': 'HMSTRUSDT', 'ma_period': 271, 'stoch_k_period': 88, 'stoch_k_smooth': 22, 'stoch_d_period': 17, 'leverage': 5},
-    {'symbol': 'NOTUSDT', 'ma_period': 40, 'stoch_k_period': 144, 'stoch_k_smooth': 67, 'stoch_d_period': 45, 'leverage': 5},
-    {'symbol': 'GRIFFAINUSDT', 'ma_period': 135, 'stoch_k_period': 149, 'stoch_k_smooth': 79, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'KOMAUSDT', 'ma_period': 232, 'stoch_k_period': 150, 'stoch_k_smooth': 71, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'AVAAIUSDT', 'ma_period': 159, 'stoch_k_period': 105, 'stoch_k_smooth': 57, 'stoch_d_period': 32, 'leverage': 5},
-    {'symbol': 'VANAUSDT', 'ma_period': 101, 'stoch_k_period': 150, 'stoch_k_smooth': 79, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'SAGAUSDT', 'ma_period': 253, 'stoch_k_period': 116, 'stoch_k_smooth': 74, 'stoch_d_period': 41, 'leverage': 5},
-    {'symbol': 'PIXELUSDT', 'ma_period': 101, 'stoch_k_period': 88, 'stoch_k_smooth': 74, 'stoch_d_period': 29, 'leverage': 5},
-    {'symbol': 'PROMUSDT', 'ma_period': 264, 'stoch_k_period': 150, 'stoch_k_smooth': 80, 'stoch_d_period': 50, 'leverage': 4},
-    {'symbol': 'DRIFTUSDT', 'ma_period': 326, 'stoch_k_period': 150, 'stoch_k_smooth': 75, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'BRETTUSDT', 'ma_period': 296, 'stoch_k_period': 84, 'stoch_k_smooth': 26, 'stoch_d_period': 43, 'leverage': 4},
-    {'symbol': 'POLUSDT', 'ma_period': 226, 'stoch_k_period': 25, 'stoch_k_smooth': 15, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'AKTUSDT', 'ma_period': 323, 'stoch_k_period': 100, 'stoch_k_smooth': 13, 'stoch_d_period': 13, 'leverage': 5},
-    {'symbol': 'SCRUSDT', 'ma_period': 168, 'stoch_k_period': 133, 'stoch_k_smooth': 75, 'stoch_d_period': 30, 'leverage': 5},
-    {'symbol': 'KAIAUSDT', 'ma_period': 53, 'stoch_k_period': 137, 'stoch_k_smooth': 78, 'stoch_d_period': 21, 'leverage': 5},
-    {'symbol': 'SPXUSDT', 'ma_period': 62, 'stoch_k_period': 148, 'stoch_k_smooth': 75, 'stoch_d_period': 17, 'leverage': 4},
-    {'symbol': 'FIDAUSDT', 'ma_period': 125, 'stoch_k_period': 99, 'stoch_k_smooth': 60, 'stoch_d_period': 26, 'leverage': 5},
-    {'symbol': 'RPLUSDT', 'ma_period': 121, 'stoch_k_period': 111, 'stoch_k_smooth': 15, 'stoch_d_period': 37, 'leverage': 5},
-    {'symbol': 'ANIMEUSDT', 'ma_period': 290, 'stoch_k_period': 149, 'stoch_k_smooth': 80, 'stoch_d_period': 32, 'leverage': 5},
-    {'symbol': 'TURBOUSDT', 'ma_period': 82, 'stoch_k_period': 89, 'stoch_k_smooth': 77, 'stoch_d_period': 45, 'leverage': 4},
-    {'symbol': 'KMNOUSDT', 'ma_period': 75, 'stoch_k_period': 149, 'stoch_k_smooth': 69, 'stoch_d_period': 38, 'leverage': 5},
-    {'symbol': 'ENAUSDT', 'ma_period': 203, 'stoch_k_period': 144, 'stoch_k_smooth': 54, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'PIPPINUSDT', 'ma_period': 191, 'stoch_k_period': 150, 'stoch_k_smooth': 76, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'POPCATUSDT', 'ma_period': 213, 'stoch_k_period': 91, 'stoch_k_smooth': 45, 'stoch_d_period': 5, 'leverage': 3},
-    {'symbol': 'ACTUSDT', 'ma_period': 302, 'stoch_k_period': 47, 'stoch_k_smooth': 26, 'stoch_d_period': 31, 'leverage': 5},
-    {'symbol': 'NFPUSDT', 'ma_period': 132, 'stoch_k_period': 128, 'stoch_k_smooth': 69, 'stoch_d_period': 45, 'leverage': 5},
-    {'symbol': 'ZETAUSDT', 'ma_period': 163, 'stoch_k_period': 47, 'stoch_k_smooth': 64, 'stoch_d_period': 10, 'leverage': 5},
-    {'symbol': 'MOCAUSDT', 'ma_period': 320, 'stoch_k_period': 148, 'stoch_k_smooth': 79, 'stoch_d_period': 50, 'leverage': 4},
-    {'symbol': 'AEVOUSDT', 'ma_period': 183, 'stoch_k_period': 121, 'stoch_k_smooth': 77, 'stoch_d_period': 13, 'leverage': 5},
-    {'symbol': 'DEGOUSDT', 'ma_period': 152, 'stoch_k_period': 110, 'stoch_k_smooth': 40, 'stoch_d_period': 4, 'leverage': 5},
-    {'symbol': 'USUALUSDT', 'ma_period': 103, 'stoch_k_period': 147, 'stoch_k_smooth': 63, 'stoch_d_period': 39, 'leverage': 5},
-    {'symbol': 'IOUSDT', 'ma_period': 124, 'stoch_k_period': 132, 'stoch_k_smooth': 57, 'stoch_d_period': 40, 'leverage': 5},
-    {'symbol': 'GRASSUSDT', 'ma_period': 213, 'stoch_k_period': 108, 'stoch_k_smooth': 73, 'stoch_d_period': 12, 'leverage': 5},
-    {'symbol': 'RAREUSDT', 'ma_period': 171, 'stoch_k_period': 75, 'stoch_k_smooth': 77, 'stoch_d_period': 20, 'leverage': 5},
-    {'symbol': 'HIPPOUSDT', 'ma_period': 87, 'stoch_k_period': 146, 'stoch_k_smooth': 73, 'stoch_d_period': 43, 'leverage': 5},
-    {'symbol': 'ALTUSDT', 'ma_period': 148, 'stoch_k_period': 147, 'stoch_k_smooth': 51, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'PORTALUSDT', 'ma_period': 161, 'stoch_k_period': 142, 'stoch_k_smooth': 74, 'stoch_d_period': 31, 'leverage': 5},
-    {'symbol': 'ORCAUSDT', 'ma_period': 164, 'stoch_k_period': 77, 'stoch_k_smooth': 35, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'MBOXUSDT', 'ma_period': 61, 'stoch_k_period': 106, 'stoch_k_smooth': 59, 'stoch_d_period': 29, 'leverage': 5},
-    {'symbol': 'BANANAUSDT', 'ma_period': 270, 'stoch_k_period': 133, 'stoch_k_smooth': 63, 'stoch_d_period': 39, 'leverage': 5},
-    {'symbol': 'RONINUSDT', 'ma_period': 67, 'stoch_k_period': 125, 'stoch_k_smooth': 52, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'RENDERUSDT', 'ma_period': 157, 'stoch_k_period': 44, 'stoch_k_smooth': 57, 'stoch_d_period': 13, 'leverage': 5},
-    {'symbol': 'NTRNUSDT', 'ma_period': 324, 'stoch_k_period': 137, 'stoch_k_smooth': 66, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'AIUSDT', 'ma_period': 96, 'stoch_k_period': 63, 'stoch_k_smooth': 62, 'stoch_d_period': 22, 'leverage': 5},
-    {'symbol': 'WUSDT', 'ma_period': 86, 'stoch_k_period': 118, 'stoch_k_smooth': 64, 'stoch_d_period': 28, 'leverage': 5},
-    {'symbol': 'DYMUSDT', 'ma_period': 301, 'stoch_k_period': 150, 'stoch_k_smooth': 70, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': '1000WHYUSDT', 'ma_period': 114, 'stoch_k_period': 97, 'stoch_k_smooth': 56, 'stoch_d_period': 15, 'leverage': 4},
-    {'symbol': 'BLURUSDT', 'ma_period': 126, 'stoch_k_period': 113, 'stoch_k_smooth': 52, 'stoch_d_period': 25, 'leverage': 5},
-    {'symbol': 'LSKUSDT', 'ma_period': 81, 'stoch_k_period': 103, 'stoch_k_smooth': 66, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'CHILLGUYUSDT', 'ma_period': 126, 'stoch_k_period': 96, 'stoch_k_smooth': 76, 'stoch_d_period': 27, 'leverage': 5},
-    {'symbol': 'BBUSDT', 'ma_period': 225, 'stoch_k_period': 136, 'stoch_k_smooth': 71, 'stoch_d_period': 32, 'leverage': 5},
-    {'symbol': 'GUSDT', 'ma_period': 131, 'stoch_k_period': 115, 'stoch_k_smooth': 30, 'stoch_d_period': 21, 'leverage': 5},
-    {'symbol': 'WIFUSDT', 'ma_period': 183, 'stoch_k_period': 96, 'stoch_k_smooth': 57, 'stoch_d_period': 29, 'leverage': 4},
-    {'symbol': '1000CHEEMSUSDT', 'ma_period': 71, 'stoch_k_period': 150, 'stoch_k_smooth': 46, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'FLUXUSDT', 'ma_period': 69, 'stoch_k_period': 70, 'stoch_k_smooth': 61, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'DIAUSDT', 'ma_period': 217, 'stoch_k_period': 35, 'stoch_k_smooth': 21, 'stoch_d_period': 40, 'leverage': 5},
-    {'symbol': 'METISUSDT', 'ma_period': 250, 'stoch_k_period': 145, 'stoch_k_smooth': 78, 'stoch_d_period': 49, 'leverage': 5},
-    {'symbol': 'BICOUSDT', 'ma_period': 285, 'stoch_k_period': 117, 'stoch_k_smooth': 71, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'STRKUSDT', 'ma_period': 168, 'stoch_k_period': 117, 'stoch_k_smooth': 55, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'PYTHUSDT', 'ma_period': 171, 'stoch_k_period': 147, 'stoch_k_smooth': 20, 'stoch_d_period': 37, 'leverage': 5},
-    {'symbol': 'COSUSDT', 'ma_period': 343, 'stoch_k_period': 149, 'stoch_k_smooth': 75, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'ETHWUSDT', 'ma_period': 350, 'stoch_k_period': 116, 'stoch_k_smooth': 76, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'TNSRUSDT', 'ma_period': 268, 'stoch_k_period': 103, 'stoch_k_smooth': 70, 'stoch_d_period': 34, 'leverage': 5},
-    {'symbol': 'MEMEUSDT', 'ma_period': 99, 'stoch_k_period': 95, 'stoch_k_smooth': 75, 'stoch_d_period': 49, 'leverage': 4},
-    {'symbol': 'LUMIAUSDT', 'ma_period': 290, 'stoch_k_period': 66, 'stoch_k_smooth': 11, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'SEIUSDT', 'ma_period': 192, 'stoch_k_period': 119, 'stoch_k_smooth': 66, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'REZUSDT', 'ma_period': 221, 'stoch_k_period': 35, 'stoch_k_smooth': 9, 'stoch_d_period': 20, 'leverage': 3},
-    {'symbol': 'CATIUSDT', 'ma_period': 318, 'stoch_k_period': 48, 'stoch_k_smooth': 5, 'stoch_d_period': 33, 'leverage': 5},
-    {'symbol': 'MOVRUSDT', 'ma_period': 258, 'stoch_k_period': 128, 'stoch_k_smooth': 53, 'stoch_d_period': 40, 'leverage': 5},
-    {'symbol': 'BIGTIMEUSDT', 'ma_period': 163, 'stoch_k_period': 80, 'stoch_k_smooth': 57, 'stoch_d_period': 8, 'leverage': 5},
-    {'symbol': 'AVAUSDT', 'ma_period': 104, 'stoch_k_period': 145, 'stoch_k_smooth': 77, 'stoch_d_period': 26, 'leverage': 5},
-    {'symbol': 'MELANIAUSDT', 'ma_period': 184, 'stoch_k_period': 146, 'stoch_k_smooth': 71, 'stoch_d_period': 32, 'leverage': 5},
-    {'symbol': 'MOODENGUSDT', 'ma_period': 245, 'stoch_k_period': 28, 'stoch_k_smooth': 12, 'stoch_d_period': 4, 'leverage': 2},
-    {'symbol': 'NEIROUSDT', 'ma_period': 289, 'stoch_k_period': 104, 'stoch_k_smooth': 58, 'stoch_d_period': 6, 'leverage': 3},
-    {'symbol': 'POLYXUSDT', 'ma_period': 239, 'stoch_k_period': 122, 'stoch_k_smooth': 65, 'stoch_d_period': 35, 'leverage': 5},
-    {'symbol': 'IDUSDT', 'ma_period': 46, 'stoch_k_period': 138, 'stoch_k_smooth': 76, 'stoch_d_period': 30, 'leverage': 5},
-    {'symbol': 'TONUSDT', 'ma_period': 114, 'stoch_k_period': 111, 'stoch_k_smooth': 78, 'stoch_d_period': 26, 'leverage': 5},
-    {'symbol': 'SAFEUSDT', 'ma_period': 167, 'stoch_k_period': 29, 'stoch_k_smooth': 59, 'stoch_d_period': 40, 'leverage': 5},
-    {'symbol': 'WAXPUSDT', 'ma_period': 167, 'stoch_k_period': 139, 'stoch_k_smooth': 70, 'stoch_d_period': 35, 'leverage': 5},
-    {'symbol': 'FIOUSDT', 'ma_period': 284, 'stoch_k_period': 75, 'stoch_k_smooth': 7, 'stoch_d_period': 29, 'leverage': 5},
-    {'symbol': 'XAIUSDT', 'ma_period': 88, 'stoch_k_period': 107, 'stoch_k_smooth': 58, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'ILVUSDT', 'ma_period': 182, 'stoch_k_period': 98, 'stoch_k_smooth': 71, 'stoch_d_period': 49, 'leverage': 5},
-    {'symbol': 'HFTUSDT', 'ma_period': 331, 'stoch_k_period': 148, 'stoch_k_smooth': 78, 'stoch_d_period': 43, 'leverage': 5},
-    {'symbol': '1000FLOKIUSDT', 'ma_period': 128, 'stoch_k_period': 106, 'stoch_k_smooth': 70, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'STEEMUSDT', 'ma_period': 49, 'stoch_k_period': 115, 'stoch_k_smooth': 53, 'stoch_d_period': 36, 'leverage': 5},
-    {'symbol': 'ACEUSDT', 'ma_period': 191, 'stoch_k_period': 70, 'stoch_k_smooth': 65, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'ARKMUSDT', 'ma_period': 144, 'stoch_k_period': 82, 'stoch_k_smooth': 26, 'stoch_d_period': 35, 'leverage': 5},
-    {'symbol': 'CAKEUSDT', 'ma_period': 35, 'stoch_k_period': 110, 'stoch_k_smooth': 77, 'stoch_d_period': 25, 'leverage': 5},
-    {'symbol': 'ETHFIUSDT', 'ma_period': 350, 'stoch_k_period': 146, 'stoch_k_smooth': 62, 'stoch_d_period': 11, 'leverage': 5},
-    {'symbol': 'ARBUSDT', 'ma_period': 205, 'stoch_k_period': 150, 'stoch_k_smooth': 67, 'stoch_d_period': 15, 'leverage': 5},
-    {'symbol': 'BEAMXUSDT', 'ma_period': 106, 'stoch_k_period': 127, 'stoch_k_smooth': 58, 'stoch_d_period': 19, 'leverage': 4},
-    {'symbol': 'THEUSDT', 'ma_period': 116, 'stoch_k_period': 113, 'stoch_k_smooth': 70, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': '1000BONKUSDT', 'ma_period': 331, 'stoch_k_period': 123, 'stoch_k_smooth': 68, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'DOGSUSDT', 'ma_period': 37, 'stoch_k_period': 25, 'stoch_k_smooth': 24, 'stoch_d_period': 50, 'leverage': 4},
-    {'symbol': 'CYBERUSDT', 'ma_period': 338, 'stoch_k_period': 135, 'stoch_k_smooth': 75, 'stoch_d_period': 35, 'leverage': 5},
-    {'symbol': 'LISTAUSDT', 'ma_period': 56, 'stoch_k_period': 116, 'stoch_k_smooth': 8, 'stoch_d_period': 23, 'leverage': 3},
-    {'symbol': 'BNTUSDT', 'ma_period': 292, 'stoch_k_period': 120, 'stoch_k_smooth': 80, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'OXTUSDT', 'ma_period': 283, 'stoch_k_period': 138, 'stoch_k_smooth': 60, 'stoch_d_period': 38, 'leverage': 5},
-    {'symbol': 'RIFUSDT', 'ma_period': 232, 'stoch_k_period': 67, 'stoch_k_smooth': 63, 'stoch_d_period': 36, 'leverage': 5},
-    {'symbol': 'FLOWUSDT', 'ma_period': 221, 'stoch_k_period': 59, 'stoch_k_smooth': 25, 'stoch_d_period': 28, 'leverage': 5},
-    {'symbol': 'POWRUSDT', 'ma_period': 183, 'stoch_k_period': 146, 'stoch_k_smooth': 69, 'stoch_d_period': 25, 'leverage': 5},
-    {'symbol': 'SUIUSDT', 'ma_period': 312, 'stoch_k_period': 148, 'stoch_k_smooth': 80, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'ORDIUSDT', 'ma_period': 144, 'stoch_k_period': 85, 'stoch_k_smooth': 77, 'stoch_d_period': 42, 'leverage': 5},
-    {'symbol': 'APEUSDT', 'ma_period': 145, 'stoch_k_period': 129, 'stoch_k_smooth': 79, 'stoch_d_period': 18, 'leverage': 5},
-    {'symbol': 'USTCUSDT', 'ma_period': 141, 'stoch_k_period': 144, 'stoch_k_smooth': 55, 'stoch_d_period': 10, 'leverage': 5},
-    {'symbol': 'COWUSDT', 'ma_period': 296, 'stoch_k_period': 79, 'stoch_k_smooth': 31, 'stoch_d_period': 5, 'leverage': 3},
-    {'symbol': 'MANAUSDT', 'ma_period': 128, 'stoch_k_period': 150, 'stoch_k_smooth': 78, 'stoch_d_period': 32, 'leverage': 5},
-    {'symbol': 'YGGUSDT', 'ma_period': 34, 'stoch_k_period': 148, 'stoch_k_smooth': 46, 'stoch_d_period': 19, 'leverage': 3},
-    {'symbol': 'HIGHUSDT', 'ma_period': 289, 'stoch_k_period': 145, 'stoch_k_smooth': 63, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'ONDOUSDT', 'ma_period': 313, 'stoch_k_period': 89, 'stoch_k_smooth': 80, 'stoch_d_period': 27, 'leverage': 5},
-    {'symbol': 'SUNUSDT', 'ma_period': 36, 'stoch_k_period': 140, 'stoch_k_smooth': 68, 'stoch_d_period': 20, 'leverage': 5},
-    {'symbol': 'LUNA2USDT', 'ma_period': 237, 'stoch_k_period': 137, 'stoch_k_smooth': 10, 'stoch_d_period': 25, 'leverage': 5},
-    {'symbol': 'ZROUSDT', 'ma_period': 116, 'stoch_k_period': 84, 'stoch_k_smooth': 50, 'stoch_d_period': 29, 'leverage': 5},
-    {'symbol': 'MAVUSDT', 'ma_period': 30, 'stoch_k_period': 150, 'stoch_k_smooth': 79, 'stoch_d_period': 6, 'leverage': 4},
-    {'symbol': 'MAGICUSDT', 'ma_period': 275, 'stoch_k_period': 144, 'stoch_k_smooth': 72, 'stoch_d_period': 34, 'leverage': 5},
-    {'symbol': 'AXLUSDT', 'ma_period': 98, 'stoch_k_period': 124, 'stoch_k_smooth': 60, 'stoch_d_period': 16, 'leverage': 4},
-    {'symbol': '1000PEPEUSDT', 'ma_period': 48, 'stoch_k_period': 25, 'stoch_k_smooth': 24, 'stoch_d_period': 31, 'leverage': 5},
-    {'symbol': 'GALAUSDT', 'ma_period': 57, 'stoch_k_period': 139, 'stoch_k_smooth': 33, 'stoch_d_period': 10, 'leverage': 4},
-    {'symbol': 'ONEUSDT', 'ma_period': 123, 'stoch_k_period': 78, 'stoch_k_smooth': 50, 'stoch_d_period': 44, 'leverage': 4},
-    {'symbol': 'JTOUSDT', 'ma_period': 126, 'stoch_k_period': 145, 'stoch_k_smooth': 78, 'stoch_d_period': 25, 'leverage': 3},
-    {'symbol': 'AUCTIONUSDT', 'ma_period': 250, 'stoch_k_period': 142, 'stoch_k_smooth': 28, 'stoch_d_period': 16, 'leverage': 4},
-    {'symbol': 'ALCHUSDT', 'ma_period': 298, 'stoch_k_period': 48, 'stoch_k_smooth': 7, 'stoch_d_period': 41, 'leverage': 5},
-    {'symbol': 'ASTRUSDT', 'ma_period': 93, 'stoch_k_period': 59, 'stoch_k_smooth': 67, 'stoch_d_period': 44, 'leverage': 5},
-    {'symbol': 'GMTUSDT', 'ma_period': 107, 'stoch_k_period': 140, 'stoch_k_smooth': 67, 'stoch_d_period': 47, 'leverage': 5},
-    {'symbol': 'OGNUSDT', 'ma_period': 118, 'stoch_k_period': 119, 'stoch_k_smooth': 73, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'WLDUSDT', 'ma_period': 219, 'stoch_k_period': 123, 'stoch_k_smooth': 17, 'stoch_d_period': 4, 'leverage': 4},
-    {'symbol': 'RDNTUSDT', 'ma_period': 244, 'stoch_k_period': 63, 'stoch_k_smooth': 14, 'stoch_d_period': 6, 'leverage': 3},
-    {'symbol': 'TIAUSDT', 'ma_period': 279, 'stoch_k_period': 95, 'stoch_k_smooth': 36, 'stoch_d_period': 7, 'leverage': 3},
-    {'symbol': 'OMUSDT', 'ma_period': 347, 'stoch_k_period': 142, 'stoch_k_smooth': 18, 'stoch_d_period': 8, 'leverage': 3},
-    {'symbol': 'ZEREBROUSDT', 'ma_period': 296, 'stoch_k_period': 70, 'stoch_k_smooth': 39, 'stoch_d_period': 36, 'leverage': 2},
-    {'symbol': 'JOEUSDT', 'ma_period': 207, 'stoch_k_period': 124, 'stoch_k_smooth': 78, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'SANDUSDT', 'ma_period': 125, 'stoch_k_period': 140, 'stoch_k_smooth': 72, 'stoch_d_period': 45, 'leverage': 5},
-    {'symbol': 'AGLDUSDT', 'ma_period': 335, 'stoch_k_period': 145, 'stoch_k_smooth': 77, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'KASUSDT', 'ma_period': 151, 'stoch_k_period': 139, 'stoch_k_smooth': 61, 'stoch_d_period': 46, 'leverage': 4},
-    {'symbol': 'OPUSDT', 'ma_period': 343, 'stoch_k_period': 148, 'stoch_k_smooth': 76, 'stoch_d_period': 48, 'leverage': 5},
-    {'symbol': 'MANTAUSDT', 'ma_period': 237, 'stoch_k_period': 81, 'stoch_k_smooth': 39, 'stoch_d_period': 10, 'leverage': 5},
-    {'symbol': 'PENDLEUSDT', 'ma_period': 153, 'stoch_k_period': 73, 'stoch_k_smooth': 70, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'STXUSDT', 'ma_period': 93, 'stoch_k_period': 148, 'stoch_k_smooth': 74, 'stoch_d_period': 48, 'leverage': 4},
-    {'symbol': 'HBARUSDT', 'ma_period': 129, 'stoch_k_period': 102, 'stoch_k_smooth': 76, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'HOOKUSDT', 'ma_period': 321, 'stoch_k_period': 135, 'stoch_k_smooth': 71, 'stoch_d_period': 44, 'leverage': 4},
-    {'symbol': 'ICXUSDT', 'ma_period': 120, 'stoch_k_period': 148, 'stoch_k_smooth': 62, 'stoch_d_period': 30, 'leverage': 5},
-    {'symbol': 'MINAUSDT', 'ma_period': 346, 'stoch_k_period': 55, 'stoch_k_smooth': 32, 'stoch_d_period': 9, 'leverage': 4},
-    {'symbol': 'BSVUSDT', 'ma_period': 213, 'stoch_k_period': 126, 'stoch_k_smooth': 31, 'stoch_d_period': 18, 'leverage': 3},
-    {'symbol': '1000LUNCUSDT', 'ma_period': 108, 'stoch_k_period': 117, 'stoch_k_smooth': 30, 'stoch_d_period': 24, 'leverage': 5},
-    {'symbol': 'CKBUSDT', 'ma_period': 217, 'stoch_k_period': 146, 'stoch_k_smooth': 65, 'stoch_d_period': 47, 'leverage': 4},
-    {'symbol': 'FETUSDT', 'ma_period': 62, 'stoch_k_period': 81, 'stoch_k_smooth': 52, 'stoch_d_period': 49, 'leverage': 4},
-    {'symbol': 'PHBUSDT', 'ma_period': 144, 'stoch_k_period': 149, 'stoch_k_smooth': 76, 'stoch_d_period': 22, 'leverage': 3},
-    {'symbol': 'SANTOSUSDT', 'ma_period': 179, 'stoch_k_period': 103, 'stoch_k_smooth': 62, 'stoch_d_period': 39, 'leverage': 5},
-    {'symbol': 'SUSHIUSDT', 'ma_period': 216, 'stoch_k_period': 147, 'stoch_k_smooth': 60, 'stoch_d_period': 17, 'leverage': 4},
-    {'symbol': 'EDUUSDT', 'ma_period': 47, 'stoch_k_period': 150, 'stoch_k_smooth': 62, 'stoch_d_period': 22, 'leverage': 4},
-    {'symbol': 'JUPUSDT', 'ma_period': 86, 'stoch_k_period': 150, 'stoch_k_smooth': 63, 'stoch_d_period': 29, 'leverage': 3},
-    {'symbol': '1000SATSUSDT', 'ma_period': 344, 'stoch_k_period': 99, 'stoch_k_smooth': 34, 'stoch_d_period': 7, 'leverage': 3},
-    {'symbol': 'ONGUSDT', 'ma_period': 190, 'stoch_k_period': 149, 'stoch_k_smooth': 76, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'IMXUSDT', 'ma_period': 103, 'stoch_k_period': 138, 'stoch_k_smooth': 52, 'stoch_d_period': 32, 'leverage': 3},
-    {'symbol': 'AXSUSDT', 'ma_period': 198, 'stoch_k_period': 90, 'stoch_k_smooth': 63, 'stoch_d_period': 12, 'leverage': 3},
-    {'symbol': 'MORPHOUSDT', 'ma_period': 312, 'stoch_k_period': 27, 'stoch_k_smooth': 39, 'stoch_d_period': 6, 'leverage': 4},
-    {'symbol': 'WOOUSDT', 'ma_period': 198, 'stoch_k_period': 149, 'stoch_k_smooth': 73, 'stoch_d_period': 43, 'leverage': 3},
-    {'symbol': 'API3USDT', 'ma_period': 230, 'stoch_k_period': 142, 'stoch_k_smooth': 49, 'stoch_d_period': 46, 'leverage': 4},
-    {'symbol': '1000XECUSDT', 'ma_period': 207, 'stoch_k_period': 91, 'stoch_k_smooth': 25, 'stoch_d_period': 30, 'leverage': 4},
-    {'symbol': 'SKLUSDT', 'ma_period': 120, 'stoch_k_period': 118, 'stoch_k_smooth': 80, 'stoch_d_period': 48, 'leverage': 4},
-    {'symbol': 'C98USDT', 'ma_period': 210, 'stoch_k_period': 29, 'stoch_k_smooth': 76, 'stoch_d_period': 47, 'leverage': 3},
-    {'symbol': 'IOSTUSDT', 'ma_period': 344, 'stoch_k_period': 90, 'stoch_k_smooth': 79, 'stoch_d_period': 50, 'leverage': 5},
-    {'symbol': 'CTSIUSDT', 'ma_period': 221, 'stoch_k_period': 135, 'stoch_k_smooth': 71, 'stoch_d_period': 38, 'leverage': 5},
-    {'symbol': 'ENJUSDT', 'ma_period': 142, 'stoch_k_period': 150, 'stoch_k_smooth': 8, 'stoch_d_period': 40, 'leverage': 3},
-    {'symbol': 'CFXUSDT', 'ma_period': 159, 'stoch_k_period': 82, 'stoch_k_smooth': 70, 'stoch_d_period': 25, 'leverage': 2},
-    {'symbol': 'IOTXUSDT', 'ma_period': 173, 'stoch_k_period': 90, 'stoch_k_smooth': 44, 'stoch_d_period': 10, 'leverage': 3},
-    {'symbol': 'VETUSDT', 'ma_period': 202, 'stoch_k_period': 116, 'stoch_k_smooth': 73, 'stoch_d_period': 32, 'leverage': 4},
-    {'symbol': '1000SHIBUSDT', 'ma_period': 96, 'stoch_k_period': 86, 'stoch_k_smooth': 61, 'stoch_d_period': 20, 'leverage': 4},
-    {'symbol': 'XVGUSDT', 'ma_period': 70, 'stoch_k_period': 121, 'stoch_k_smooth': 43, 'stoch_d_period': 18, 'leverage': 4},
-    {'symbol': 'GLMUSDT', 'ma_period': 86, 'stoch_k_period': 77, 'stoch_k_smooth': 29, 'stoch_d_period': 17, 'leverage': 3},
-    {'symbol': 'ANKRUSDT', 'ma_period': 343, 'stoch_k_period': 148, 'stoch_k_smooth': 66, 'stoch_d_period': 35, 'leverage': 4},
-    {'symbol': 'RVNUSDT', 'ma_period': 165, 'stoch_k_period': 146, 'stoch_k_smooth': 46, 'stoch_d_period': 22, 'leverage': 3},
-    {'symbol': 'ROSEUSDT', 'ma_period': 142, 'stoch_k_period': 147, 'stoch_k_smooth': 73, 'stoch_d_period': 45, 'leverage': 3},
-    {'symbol': 'AVAXUSDT', 'ma_period': 96, 'stoch_k_period': 60, 'stoch_k_smooth': 35, 'stoch_d_period': 8, 'leverage': 3},
-    {'symbol': 'KSMUSDT', 'ma_period': 115, 'stoch_k_period': 113, 'stoch_k_smooth': 39, 'stoch_d_period': 50, 'leverage': 3},
-    {'symbol': 'HOTUSDT', 'ma_period': 181, 'stoch_k_period': 139, 'stoch_k_smooth': 57, 'stoch_d_period': 33, 'leverage': 3},
-    {'symbol': 'ENSUSDT', 'ma_period': 128, 'stoch_k_period': 138, 'stoch_k_smooth': 60, 'stoch_d_period': 45, 'leverage': 4},
-    {'symbol': 'TUSDT', 'ma_period': 124, 'stoch_k_period': 146, 'stoch_k_smooth': 80, 'stoch_d_period': 31, 'leverage': 3},
-    {'symbol': 'IOTAUSDT', 'ma_period': 147, 'stoch_k_period': 131, 'stoch_k_smooth': 59, 'stoch_d_period': 47, 'leverage': 4},
-    {'symbol': 'GTCUSDT', 'ma_period': 123, 'stoch_k_period': 140, 'stoch_k_smooth': 34, 'stoch_d_period': 43, 'leverage': 3},
-    {'symbol': 'NEARUSDT', 'ma_period': 174, 'stoch_k_period': 81, 'stoch_k_smooth': 70, 'stoch_d_period': 26, 'leverage': 3},
-    {'symbol': 'TWTUSDT', 'ma_period': 200, 'stoch_k_period': 26, 'stoch_k_smooth': 33, 'stoch_d_period': 14, 'leverage': 4},
-    {'symbol': 'SPELLUSDT', 'ma_period': 114, 'stoch_k_period': 97, 'stoch_k_smooth': 59, 'stoch_d_period': 31, 'leverage': 3},
-    {'symbol': 'RSRUSDT', 'ma_period': 84, 'stoch_k_period': 115, 'stoch_k_smooth': 62, 'stoch_d_period': 20, 'leverage': 3},
-    {'symbol': 'FILUSDT', 'ma_period': 272, 'stoch_k_period': 122, 'stoch_k_smooth': 75, 'stoch_d_period': 37, 'leverage': 4},
-    {'symbol': 'TRUUSDT', 'ma_period': 111, 'stoch_k_period': 135, 'stoch_k_smooth': 18, 'stoch_d_period': 41, 'leverage': 2},
+    {'symbol': 'BTCUSDT', 'ma_period': 259, 'stoch_k_period': 47, 'stoch_k_smooth': 26, 'stoch_d_period': 10, 'leverage': 3},
+    {'symbol': 'ETHUSDT', 'ma_period': 226, 'stoch_k_period': 148, 'stoch_k_smooth': 45, 'stoch_d_period': 29, 'leverage': 1},
+    {'symbol': 'XRPUSDT', 'ma_period': 199, 'stoch_k_period': 115, 'stoch_k_smooth': 16, 'stoch_d_period': 46, 'leverage': 1},
+    {'symbol': 'SOLUSDT', 'ma_period': 243, 'stoch_k_period': 39, 'stoch_k_smooth': 28, 'stoch_d_period': 50, 'leverage': 2},
+    {'symbol': 'DOGEUSDT', 'ma_period': 101, 'stoch_k_period': 81, 'stoch_k_smooth': 28, 'stoch_d_period': 16, 'leverage': 3},
+    {'symbol': 'ADAUSDT', 'ma_period': 246, 'stoch_k_period': 21, 'stoch_k_smooth': 25, 'stoch_d_period': 34, 'leverage': 2},
+    {'symbol': 'SUSDT', 'ma_period': 32, 'stoch_k_period': 78, 'stoch_k_smooth': 65, 'stoch_d_period': 42, 'leverage': 5},
+    {'symbol': 'SOLVUSDT', 'ma_period': 214, 'stoch_k_period': 126, 'stoch_k_smooth': 27, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'RAYSOLUSDT', 'ma_period': 167, 'stoch_k_period': 114, 'stoch_k_smooth': 21, 'stoch_d_period': 20, 'leverage': 5},
+    {'symbol': 'BERAUSDT', 'ma_period': 192, 'stoch_k_period': 140, 'stoch_k_smooth': 45, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'DUSDT', 'ma_period': 324, 'stoch_k_period': 135, 'stoch_k_smooth': 40, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'CGPTUSDT', 'ma_period': 75, 'stoch_k_period': 67, 'stoch_k_smooth': 68, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': '1000000MOGUSDT', 'ma_period': 146, 'stoch_k_period': 99, 'stoch_k_smooth': 78, 'stoch_d_period': 44, 'leverage': 5},
+    {'symbol': 'VELODROMEUSDT', 'ma_period': 340, 'stoch_k_period': 143, 'stoch_k_smooth': 66, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'PENGUUSDT', 'ma_period': 101, 'stoch_k_period': 95, 'stoch_k_smooth': 71, 'stoch_d_period': 16, 'leverage': 5},
+    {'symbol': 'AIXBTUSDT', 'ma_period': 129, 'stoch_k_period': 150, 'stoch_k_smooth': 10, 'stoch_d_period': 16, 'leverage': 5},
+    {'symbol': 'MEUSDT', 'ma_period': 205, 'stoch_k_period': 17, 'stoch_k_smooth': 5, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'SONICUSDT', 'ma_period': 349, 'stoch_k_period': 28, 'stoch_k_smooth': 7, 'stoch_d_period': 15, 'leverage': 5},
+    {'symbol': 'AEROUSDT', 'ma_period': 327, 'stoch_k_period': 114, 'stoch_k_smooth': 25, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'FARTCOINUSDT', 'ma_period': 227, 'stoch_k_period': 91, 'stoch_k_smooth': 80, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'CETUSUSDT', 'ma_period': 198, 'stoch_k_period': 129, 'stoch_k_smooth': 29, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'VTHOUSDT', 'ma_period': 322, 'stoch_k_period': 35, 'stoch_k_smooth': 13, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'PNUTUSDT', 'ma_period': 166, 'stoch_k_period': 125, 'stoch_k_smooth': 73, 'stoch_d_period': 4, 'leverage': 5},
+    {'symbol': 'VINEUSDT', 'ma_period': 338, 'stoch_k_period': 107, 'stoch_k_smooth': 55, 'stoch_d_period': 14, 'leverage': 5},
+    {'symbol': 'MOVEUSDT', 'ma_period': 271, 'stoch_k_period': 36, 'stoch_k_smooth': 15, 'stoch_d_period': 12, 'leverage': 5},
+    {'symbol': 'MEWUSDT', 'ma_period': 108, 'stoch_k_period': 130, 'stoch_k_smooth': 59, 'stoch_d_period': 34, 'leverage': 5},
+    {'symbol': 'PHAUSDT', 'ma_period': 121, 'stoch_k_period': 110, 'stoch_k_smooth': 42, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'VIRTUALUSDT', 'ma_period': 334, 'stoch_k_period': 76, 'stoch_k_smooth': 11, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'TRUMPUSDT', 'ma_period': 348, 'stoch_k_period': 22, 'stoch_k_smooth': 68, 'stoch_d_period': 22, 'leverage': 5},
+    {'symbol': '1000CATUSDT', 'ma_period': 174, 'stoch_k_period': 25, 'stoch_k_smooth': 44, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'ZKUSDT', 'ma_period': 83, 'stoch_k_period': 79, 'stoch_k_smooth': 80, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'DEXEUSDT', 'ma_period': 87, 'stoch_k_period': 148, 'stoch_k_smooth': 74, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'GOATUSDT', 'ma_period': 184, 'stoch_k_period': 54, 'stoch_k_smooth': 14, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'EIGENUSDT', 'ma_period': 97, 'stoch_k_period': 143, 'stoch_k_smooth': 80, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'VANRYUSDT', 'ma_period': 100, 'stoch_k_period': 145, 'stoch_k_smooth': 60, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'COOKIEUSDT', 'ma_period': 350, 'stoch_k_period': 114, 'stoch_k_smooth': 62, 'stoch_d_period': 22, 'leverage': 5},
+    {'symbol': 'BOMEUSDT', 'ma_period': 123, 'stoch_k_period': 136, 'stoch_k_smooth': 48, 'stoch_d_period': 15, 'leverage': 5},
+    {'symbol': 'SWARMSUSDT', 'ma_period': 310, 'stoch_k_period': 150, 'stoch_k_smooth': 74, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'SYNUSDT', 'ma_period': 132, 'stoch_k_period': 106, 'stoch_k_smooth': 18, 'stoch_d_period': 37, 'leverage': 5},
+    {'symbol': 'DEGENUSDT', 'ma_period': 65, 'stoch_k_period': 22, 'stoch_k_smooth': 6, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': 'HIVEUSDT', 'ma_period': 220, 'stoch_k_period': 148, 'stoch_k_smooth': 80, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': 'BIOUSDT', 'ma_period': 85, 'stoch_k_period': 29, 'stoch_k_smooth': 20, 'stoch_d_period': 7, 'leverage': 5},
+    {'symbol': '1MBABYDOGEUSDT', 'ma_period': 94, 'stoch_k_period': 119, 'stoch_k_smooth': 30, 'stoch_d_period': 8, 'leverage': 5},
+    {'symbol': 'ACXUSDT', 'ma_period': 137, 'stoch_k_period': 140, 'stoch_k_smooth': 35, 'stoch_d_period': 28, 'leverage': 5},
+    {'symbol': 'SYSUSDT', 'ma_period': 267, 'stoch_k_period': 97, 'stoch_k_smooth': 11, 'stoch_d_period': 12, 'leverage': 5},
+    {'symbol': 'VVVUSDT', 'ma_period': 216, 'stoch_k_period': 23, 'stoch_k_smooth': 15, 'stoch_d_period': 16, 'leverage': 5},
+    {'symbol': 'HMSTRUSDT', 'ma_period': 143, 'stoch_k_period': 32, 'stoch_k_smooth': 32, 'stoch_d_period': 4, 'leverage': 5},
+    {'symbol': 'NOTUSDT', 'ma_period': 40, 'stoch_k_period': 142, 'stoch_k_smooth': 65, 'stoch_d_period': 40, 'leverage': 5},
+    {'symbol': 'GRIFFAINUSDT', 'ma_period': 41, 'stoch_k_period': 45, 'stoch_k_smooth': 29, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'KOMAUSDT', 'ma_period': 315, 'stoch_k_period': 141, 'stoch_k_smooth': 76, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'AVAAIUSDT', 'ma_period': 166, 'stoch_k_period': 94, 'stoch_k_smooth': 68, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'VANAUSDT', 'ma_period': 257, 'stoch_k_period': 137, 'stoch_k_smooth': 72, 'stoch_d_period': 33, 'leverage': 5},
+    {'symbol': 'SAGAUSDT', 'ma_period': 232, 'stoch_k_period': 150, 'stoch_k_smooth': 69, 'stoch_d_period': 27, 'leverage': 5},
+    {'symbol': 'PIXELUSDT', 'ma_period': 77, 'stoch_k_period': 149, 'stoch_k_smooth': 37, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'PROMUSDT', 'ma_period': 20, 'stoch_k_period': 41, 'stoch_k_smooth': 61, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'DRIFTUSDT', 'ma_period': 350, 'stoch_k_period': 150, 'stoch_k_smooth': 11, 'stoch_d_period': 31, 'leverage': 5},
+    {'symbol': 'BRETTUSDT', 'ma_period': 250, 'stoch_k_period': 15, 'stoch_k_smooth': 43, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'POLUSDT', 'ma_period': 73, 'stoch_k_period': 49, 'stoch_k_smooth': 7, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': 'AKTUSDT', 'ma_period': 202, 'stoch_k_period': 150, 'stoch_k_smooth': 17, 'stoch_d_period': 32, 'leverage': 5},
+    {'symbol': 'SCRUSDT', 'ma_period': 167, 'stoch_k_period': 132, 'stoch_k_smooth': 9, 'stoch_d_period': 17, 'leverage': 5},
+    {'symbol': 'KAIAUSDT', 'ma_period': 23, 'stoch_k_period': 149, 'stoch_k_smooth': 80, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'SPXUSDT', 'ma_period': 62, 'stoch_k_period': 128, 'stoch_k_smooth': 60, 'stoch_d_period': 31, 'leverage': 4},
+    {'symbol': 'FIDAUSDT', 'ma_period': 138, 'stoch_k_period': 54, 'stoch_k_smooth': 34, 'stoch_d_period': 42, 'leverage': 5},
+    {'symbol': 'RPLUSDT', 'ma_period': 115, 'stoch_k_period': 88, 'stoch_k_smooth': 19, 'stoch_d_period': 26, 'leverage': 5},
+    {'symbol': 'ANIMEUSDT', 'ma_period': 90, 'stoch_k_period': 149, 'stoch_k_smooth': 80, 'stoch_d_period': 32, 'leverage': 5},
+    {'symbol': 'TURBOUSDT', 'ma_period': 335, 'stoch_k_period': 140, 'stoch_k_smooth': 27, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'KMNOUSDT', 'ma_period': 61, 'stoch_k_period': 150, 'stoch_k_smooth': 65, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'ENAUSDT', 'ma_period': 222, 'stoch_k_period': 67, 'stoch_k_smooth': 24, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'PIPPINUSDT', 'ma_period': 20, 'stoch_k_period': 134, 'stoch_k_smooth': 80, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'POPCATUSDT', 'ma_period': 178, 'stoch_k_period': 87, 'stoch_k_smooth': 31, 'stoch_d_period': 43, 'leverage': 5},
+    {'symbol': 'ACTUSDT', 'ma_period': 167, 'stoch_k_period': 44, 'stoch_k_smooth': 37, 'stoch_d_period': 22, 'leverage': 5},
+    {'symbol': 'NFPUSDT', 'ma_period': 132, 'stoch_k_period': 134, 'stoch_k_smooth': 70, 'stoch_d_period': 41, 'leverage': 5},
+    {'symbol': 'ZETAUSDT', 'ma_period': 161, 'stoch_k_period': 23, 'stoch_k_smooth': 78, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'MOCAUSDT', 'ma_period': 348, 'stoch_k_period': 15, 'stoch_k_smooth': 29, 'stoch_d_period': 17, 'leverage': 5},
+    {'symbol': 'AEVOUSDT', 'ma_period': 178, 'stoch_k_period': 94, 'stoch_k_smooth': 7, 'stoch_d_period': 22, 'leverage': 5},
+    {'symbol': 'USUALUSDT', 'ma_period': 245, 'stoch_k_period': 109, 'stoch_k_smooth': 80, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'IOUSDT', 'ma_period': 158, 'stoch_k_period': 15, 'stoch_k_smooth': 80, 'stoch_d_period': 34, 'leverage': 5},
+    {'symbol': 'GRASSUSDT', 'ma_period': 276, 'stoch_k_period': 19, 'stoch_k_smooth': 17, 'stoch_d_period': 26, 'leverage': 5},
+    {'symbol': 'RAREUSDT', 'ma_period': 223, 'stoch_k_period': 104, 'stoch_k_smooth': 80, 'stoch_d_period': 39, 'leverage': 5},
+    {'symbol': 'HIPPOUSDT', 'ma_period': 86, 'stoch_k_period': 144, 'stoch_k_smooth': 74, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'ALTUSDT', 'ma_period': 164, 'stoch_k_period': 86, 'stoch_k_smooth': 56, 'stoch_d_period': 40, 'leverage': 5},
+    {'symbol': 'PORTALUSDT', 'ma_period': 266, 'stoch_k_period': 147, 'stoch_k_smooth': 26, 'stoch_d_period': 19, 'leverage': 5},
+    {'symbol': 'ORCAUSDT', 'ma_period': 133, 'stoch_k_period': 63, 'stoch_k_smooth': 60, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'MBOXUSDT', 'ma_period': 317, 'stoch_k_period': 101, 'stoch_k_smooth': 56, 'stoch_d_period': 37, 'leverage': 5},
+    {'symbol': 'BANANAUSDT', 'ma_period': 308, 'stoch_k_period': 142, 'stoch_k_smooth': 21, 'stoch_d_period': 21, 'leverage': 5},
+    {'symbol': 'RONINUSDT', 'ma_period': 67, 'stoch_k_period': 150, 'stoch_k_smooth': 59, 'stoch_d_period': 39, 'leverage': 5},
+    {'symbol': 'RENDERUSDT', 'ma_period': 211, 'stoch_k_period': 48, 'stoch_k_smooth': 31, 'stoch_d_period': 4, 'leverage': 5},
+    {'symbol': 'NTRNUSDT', 'ma_period': 96, 'stoch_k_period': 132, 'stoch_k_smooth': 42, 'stoch_d_period': 30, 'leverage': 5},
+    {'symbol': 'AIUSDT', 'ma_period': 115, 'stoch_k_period': 63, 'stoch_k_smooth': 58, 'stoch_d_period': 17, 'leverage': 5},
+    {'symbol': 'WUSDT', 'ma_period': 115, 'stoch_k_period': 139, 'stoch_k_smooth': 68, 'stoch_d_period': 11, 'leverage': 5},
+    {'symbol': 'DYMUSDT', 'ma_period': 90, 'stoch_k_period': 119, 'stoch_k_smooth': 80, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': '1000WHYUSDT', 'ma_period': 297, 'stoch_k_period': 90, 'stoch_k_smooth': 23, 'stoch_d_period': 22, 'leverage': 5},
+    {'symbol': 'BLURUSDT', 'ma_period': 229, 'stoch_k_period': 143, 'stoch_k_smooth': 59, 'stoch_d_period': 27, 'leverage': 5},
+    {'symbol': 'LSKUSDT', 'ma_period': 81, 'stoch_k_period': 106, 'stoch_k_smooth': 66, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'CHILLGUYUSDT', 'ma_period': 97, 'stoch_k_period': 121, 'stoch_k_smooth': 6, 'stoch_d_period': 4, 'leverage': 5},
+    {'symbol': 'BBUSDT', 'ma_period': 111, 'stoch_k_period': 150, 'stoch_k_smooth': 27, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'GUSDT', 'ma_period': 114, 'stoch_k_period': 140, 'stoch_k_smooth': 50, 'stoch_d_period': 8, 'leverage': 5},
+    {'symbol': 'WIFUSDT', 'ma_period': 20, 'stoch_k_period': 87, 'stoch_k_smooth': 68, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': '1000CHEEMSUSDT', 'ma_period': 25, 'stoch_k_period': 17, 'stoch_k_smooth': 79, 'stoch_d_period': 13, 'leverage': 5},
+    {'symbol': 'FLUXUSDT', 'ma_period': 57, 'stoch_k_period': 73, 'stoch_k_smooth': 77, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'DIAUSDT', 'ma_period': 92, 'stoch_k_period': 131, 'stoch_k_smooth': 58, 'stoch_d_period': 43, 'leverage': 5},
+    {'symbol': 'METISUSDT', 'ma_period': 174, 'stoch_k_period': 149, 'stoch_k_smooth': 13, 'stoch_d_period': 39, 'leverage': 5},
+    {'symbol': 'BICOUSDT', 'ma_period': 244, 'stoch_k_period': 113, 'stoch_k_smooth': 42, 'stoch_d_period': 6, 'leverage': 1},
+    {'symbol': 'STRKUSDT', 'ma_period': 96, 'stoch_k_period': 126, 'stoch_k_smooth': 56, 'stoch_d_period': 35, 'leverage': 5},
+    {'symbol': 'PYTHUSDT', 'ma_period': 205, 'stoch_k_period': 33, 'stoch_k_smooth': 67, 'stoch_d_period': 33, 'leverage': 5},
+    {'symbol': 'COSUSDT', 'ma_period': 206, 'stoch_k_period': 98, 'stoch_k_smooth': 70, 'stoch_d_period': 12, 'leverage': 5},
+    {'symbol': 'ETHWUSDT', 'ma_period': 191, 'stoch_k_period': 141, 'stoch_k_smooth': 57, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'TNSRUSDT', 'ma_period': 227, 'stoch_k_period': 42, 'stoch_k_smooth': 78, 'stoch_d_period': 29, 'leverage': 5},
+    {'symbol': 'MEMEUSDT', 'ma_period': 248, 'stoch_k_period': 66, 'stoch_k_smooth': 8, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'LUMIAUSDT', 'ma_period': 297, 'stoch_k_period': 146, 'stoch_k_smooth': 8, 'stoch_d_period': 43, 'leverage': 5},
+    {'symbol': 'SEIUSDT', 'ma_period': 192, 'stoch_k_period': 121, 'stoch_k_smooth': 67, 'stoch_d_period': 39, 'leverage': 5},
+    {'symbol': 'REZUSDT', 'ma_period': 223, 'stoch_k_period': 16, 'stoch_k_smooth': 13, 'stoch_d_period': 34, 'leverage': 4},
+    {'symbol': 'CATIUSDT', 'ma_period': 318, 'stoch_k_period': 44, 'stoch_k_smooth': 18, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'MOVRUSDT', 'ma_period': 218, 'stoch_k_period': 125, 'stoch_k_smooth': 47, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'BIGTIMEUSDT', 'ma_period': 187, 'stoch_k_period': 82, 'stoch_k_smooth': 58, 'stoch_d_period': 7, 'leverage': 5},
+    {'symbol': 'AVAUSDT', 'ma_period': 338, 'stoch_k_period': 15, 'stoch_k_smooth': 45, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'MELANIAUSDT', 'ma_period': 151, 'stoch_k_period': 50, 'stoch_k_smooth': 19, 'stoch_d_period': 43, 'leverage': 5},
+    {'symbol': 'MOODENGUSDT', 'ma_period': 241, 'stoch_k_period': 31, 'stoch_k_smooth': 6, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': 'NEIROUSDT', 'ma_period': 120, 'stoch_k_period': 92, 'stoch_k_smooth': 56, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'POLYXUSDT', 'ma_period': 239, 'stoch_k_period': 113, 'stoch_k_smooth': 73, 'stoch_d_period': 36, 'leverage': 5},
+    {'symbol': 'IDUSDT', 'ma_period': 46, 'stoch_k_period': 143, 'stoch_k_smooth': 75, 'stoch_d_period': 30, 'leverage': 5},
+    {'symbol': 'TONUSDT', 'ma_period': 77, 'stoch_k_period': 118, 'stoch_k_smooth': 79, 'stoch_d_period': 19, 'leverage': 5},
+    {'symbol': 'SAFEUSDT', 'ma_period': 139, 'stoch_k_period': 65, 'stoch_k_smooth': 5, 'stoch_d_period': 7, 'leverage': 5},
+    {'symbol': 'WAXPUSDT', 'ma_period': 129, 'stoch_k_period': 136, 'stoch_k_smooth': 71, 'stoch_d_period': 34, 'leverage': 5},
+    {'symbol': 'XAIUSDT', 'ma_period': 165, 'stoch_k_period': 47, 'stoch_k_smooth': 80, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': 'ILVUSDT', 'ma_period': 182, 'stoch_k_period': 105, 'stoch_k_smooth': 80, 'stoch_d_period': 32, 'leverage': 5},
+    {'symbol': 'HFTUSDT', 'ma_period': 331, 'stoch_k_period': 134, 'stoch_k_smooth': 76, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': '1000FLOKIUSDT', 'ma_period': 128, 'stoch_k_period': 104, 'stoch_k_smooth': 70, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'STEEMUSDT', 'ma_period': 49, 'stoch_k_period': 135, 'stoch_k_smooth': 53, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'ACEUSDT', 'ma_period': 285, 'stoch_k_period': 66, 'stoch_k_smooth': 45, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': 'ARKMUSDT', 'ma_period': 188, 'stoch_k_period': 72, 'stoch_k_smooth': 22, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'CAKEUSDT', 'ma_period': 56, 'stoch_k_period': 123, 'stoch_k_smooth': 7, 'stoch_d_period': 16, 'leverage': 5},
+    {'symbol': 'ETHFIUSDT', 'ma_period': 219, 'stoch_k_period': 74, 'stoch_k_smooth': 19, 'stoch_d_period': 4, 'leverage': 5},
+    {'symbol': 'ARBUSDT', 'ma_period': 124, 'stoch_k_period': 90, 'stoch_k_smooth': 39, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'BEAMXUSDT', 'ma_period': 103, 'stoch_k_period': 44, 'stoch_k_smooth': 77, 'stoch_d_period': 29, 'leverage': 5},
+    {'symbol': 'THEUSDT', 'ma_period': 201, 'stoch_k_period': 149, 'stoch_k_smooth': 72, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': '1000BONKUSDT', 'ma_period': 36, 'stoch_k_period': 20, 'stoch_k_smooth': 5, 'stoch_d_period': 33, 'leverage': 3},
+    {'symbol': 'DOGSUSDT', 'ma_period': 274, 'stoch_k_period': 32, 'stoch_k_smooth': 62, 'stoch_d_period': 18, 'leverage': 5},
+    {'symbol': 'CYBERUSDT', 'ma_period': 344, 'stoch_k_period': 141, 'stoch_k_smooth': 56, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'LISTAUSDT', 'ma_period': 122, 'stoch_k_period': 104, 'stoch_k_smooth': 64, 'stoch_d_period': 31, 'leverage': 5},
+    {'symbol': 'BNTUSDT', 'ma_period': 291, 'stoch_k_period': 113, 'stoch_k_smooth': 79, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'RIFUSDT', 'ma_period': 129, 'stoch_k_period': 148, 'stoch_k_smooth': 71, 'stoch_d_period': 16, 'leverage': 5},
+    {'symbol': 'FLOWUSDT', 'ma_period': 115, 'stoch_k_period': 116, 'stoch_k_smooth': 52, 'stoch_d_period': 44, 'leverage': 5},
+    {'symbol': 'POWRUSDT', 'ma_period': 186, 'stoch_k_period': 145, 'stoch_k_smooth': 80, 'stoch_d_period': 10, 'leverage': 5},
+    {'symbol': 'SUIUSDT', 'ma_period': 338, 'stoch_k_period': 148, 'stoch_k_smooth': 76, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'ORDIUSDT', 'ma_period': 177, 'stoch_k_period': 68, 'stoch_k_smooth': 70, 'stoch_d_period': 41, 'leverage': 5},
+    {'symbol': 'APEUSDT', 'ma_period': 144, 'stoch_k_period': 135, 'stoch_k_smooth': 25, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'USTCUSDT', 'ma_period': 310, 'stoch_k_period': 106, 'stoch_k_smooth': 77, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'COWUSDT', 'ma_period': 204, 'stoch_k_period': 58, 'stoch_k_smooth': 17, 'stoch_d_period': 26, 'leverage': 5},
+    {'symbol': 'MANAUSDT', 'ma_period': 186, 'stoch_k_period': 149, 'stoch_k_smooth': 78, 'stoch_d_period': 34, 'leverage': 5},
+    {'symbol': 'YGGUSDT', 'ma_period': 223, 'stoch_k_period': 145, 'stoch_k_smooth': 36, 'stoch_d_period': 24, 'leverage': 5},
+    {'symbol': 'HIGHUSDT', 'ma_period': 20, 'stoch_k_period': 76, 'stoch_k_smooth': 58, 'stoch_d_period': 8, 'leverage': 4},
+    {'symbol': 'ONDOUSDT', 'ma_period': 331, 'stoch_k_period': 59, 'stoch_k_smooth': 78, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'SUNUSDT', 'ma_period': 162, 'stoch_k_period': 139, 'stoch_k_smooth': 71, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'LUNA2USDT', 'ma_period': 166, 'stoch_k_period': 14, 'stoch_k_smooth': 47, 'stoch_d_period': 15, 'leverage': 5},
+    {'symbol': 'ZROUSDT', 'ma_period': 65, 'stoch_k_period': 73, 'stoch_k_smooth': 6, 'stoch_d_period': 22, 'leverage': 4},
+    {'symbol': 'MAVUSDT', 'ma_period': 243, 'stoch_k_period': 150, 'stoch_k_smooth': 12, 'stoch_d_period': 19, 'leverage': 5},
+    {'symbol': 'MAGICUSDT', 'ma_period': 288, 'stoch_k_period': 148, 'stoch_k_smooth': 72, 'stoch_d_period': 31, 'leverage': 5},
+    {'symbol': 'AXLUSDT', 'ma_period': 346, 'stoch_k_period': 147, 'stoch_k_smooth': 32, 'stoch_d_period': 24, 'leverage': 5},
+    {'symbol': '1000PEPEUSDT', 'ma_period': 48, 'stoch_k_period': 27, 'stoch_k_smooth': 26, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'GALAUSDT', 'ma_period': 47, 'stoch_k_period': 55, 'stoch_k_smooth': 28, 'stoch_d_period': 11, 'leverage': 5},
+    {'symbol': 'ONEUSDT', 'ma_period': 123, 'stoch_k_period': 127, 'stoch_k_smooth': 76, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'JTOUSDT', 'ma_period': 82, 'stoch_k_period': 123, 'stoch_k_smooth': 79, 'stoch_d_period': 31, 'leverage': 3},
+    {'symbol': 'AUCTIONUSDT', 'ma_period': 68, 'stoch_k_period': 18, 'stoch_k_smooth': 30, 'stoch_d_period': 32, 'leverage': 5},
+    {'symbol': 'ALCHUSDT', 'ma_period': 96, 'stoch_k_period': 19, 'stoch_k_smooth': 26, 'stoch_d_period': 41, 'leverage': 5},
+    {'symbol': 'GMTUSDT', 'ma_period': 107, 'stoch_k_period': 133, 'stoch_k_smooth': 69, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'OGNUSDT', 'ma_period': 267, 'stoch_k_period': 57, 'stoch_k_smooth': 80, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'WLDUSDT', 'ma_period': 188, 'stoch_k_period': 14, 'stoch_k_smooth': 59, 'stoch_d_period': 36, 'leverage': 5},
+    {'symbol': 'RDNTUSDT', 'ma_period': 271, 'stoch_k_period': 39, 'stoch_k_smooth': 40, 'stoch_d_period': 11, 'leverage': 5},
+    {'symbol': 'TIAUSDT', 'ma_period': 331, 'stoch_k_period': 149, 'stoch_k_smooth': 37, 'stoch_d_period': 37, 'leverage': 5},
+    {'symbol': 'ZEREBROUSDT', 'ma_period': 347, 'stoch_k_period': 131, 'stoch_k_smooth': 35, 'stoch_d_period': 37, 'leverage': 5},
+    {'symbol': 'JOEUSDT', 'ma_period': 245, 'stoch_k_period': 149, 'stoch_k_smooth': 46, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'SANDUSDT', 'ma_period': 77, 'stoch_k_period': 19, 'stoch_k_smooth': 5, 'stoch_d_period': 35, 'leverage': 4},
+    {'symbol': 'AGLDUSDT', 'ma_period': 116, 'stoch_k_period': 146, 'stoch_k_smooth': 76, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'KASUSDT', 'ma_period': 81, 'stoch_k_period': 81, 'stoch_k_smooth': 77, 'stoch_d_period': 30, 'leverage': 5},
+    {'symbol': 'OPUSDT', 'ma_period': 345, 'stoch_k_period': 123, 'stoch_k_smooth': 72, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'MANTAUSDT', 'ma_period': 59, 'stoch_k_period': 21, 'stoch_k_smooth': 37, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': 'PENDLEUSDT', 'ma_period': 145, 'stoch_k_period': 90, 'stoch_k_smooth': 63, 'stoch_d_period': 15, 'leverage': 5},
+    {'symbol': 'STXUSDT', 'ma_period': 315, 'stoch_k_period': 110, 'stoch_k_smooth': 76, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'HBARUSDT', 'ma_period': 128, 'stoch_k_period': 111, 'stoch_k_smooth': 76, 'stoch_d_period': 40, 'leverage': 5},
+    {'symbol': 'ICXUSDT', 'ma_period': 128, 'stoch_k_period': 146, 'stoch_k_smooth': 63, 'stoch_d_period': 29, 'leverage': 5},
+    {'symbol': 'MINAUSDT', 'ma_period': 314, 'stoch_k_period': 148, 'stoch_k_smooth': 5, 'stoch_d_period': 33, 'leverage': 5},
+    {'symbol': 'BSVUSDT', 'ma_period': 39, 'stoch_k_period': 93, 'stoch_k_smooth': 37, 'stoch_d_period': 40, 'leverage': 5},
+    {'symbol': '1000LUNCUSDT', 'ma_period': 130, 'stoch_k_period': 121, 'stoch_k_smooth': 38, 'stoch_d_period': 13, 'leverage': 5},
+    {'symbol': 'CKBUSDT', 'ma_period': 306, 'stoch_k_period': 138, 'stoch_k_smooth': 62, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'FETUSDT', 'ma_period': 136, 'stoch_k_period': 103, 'stoch_k_smooth': 70, 'stoch_d_period': 19, 'leverage': 5},
+    {'symbol': 'PHBUSDT', 'ma_period': 230, 'stoch_k_period': 149, 'stoch_k_smooth': 7, 'stoch_d_period': 45, 'leverage': 4},
+    {'symbol': 'SANTOSUSDT', 'ma_period': 185, 'stoch_k_period': 136, 'stoch_k_smooth': 16, 'stoch_d_period': 50, 'leverage': 5},
+    {'symbol': 'SUSHIUSDT', 'ma_period': 216, 'stoch_k_period': 148, 'stoch_k_smooth': 58, 'stoch_d_period': 10, 'leverage': 4},
+    {'symbol': 'EDUUSDT', 'ma_period': 39, 'stoch_k_period': 147, 'stoch_k_smooth': 54, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'JUPUSDT', 'ma_period': 24, 'stoch_k_period': 112, 'stoch_k_smooth': 50, 'stoch_d_period': 30, 'leverage': 5},
+    {'symbol': '1000SATSUSDT', 'ma_period': 240, 'stoch_k_period': 145, 'stoch_k_smooth': 18, 'stoch_d_period': 11, 'leverage': 3},
+    {'symbol': 'ONGUSDT', 'ma_period': 274, 'stoch_k_period': 121, 'stoch_k_smooth': 8, 'stoch_d_period': 9, 'leverage': 3},
+    {'symbol': 'IMXUSDT', 'ma_period': 131, 'stoch_k_period': 107, 'stoch_k_smooth': 54, 'stoch_d_period': 37, 'leverage': 5},
+    {'symbol': 'AXSUSDT', 'ma_period': 297, 'stoch_k_period': 14, 'stoch_k_smooth': 45, 'stoch_d_period': 16, 'leverage': 2},
+    {'symbol': 'MORPHOUSDT', 'ma_period': 138, 'stoch_k_period': 39, 'stoch_k_smooth': 18, 'stoch_d_period': 9, 'leverage': 5},
+    {'symbol': 'WOOUSDT', 'ma_period': 109, 'stoch_k_period': 150, 'stoch_k_smooth': 80, 'stoch_d_period': 20, 'leverage': 4},
+    {'symbol': 'API3USDT', 'ma_period': 224, 'stoch_k_period': 128, 'stoch_k_smooth': 56, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': '1000XECUSDT', 'ma_period': 231, 'stoch_k_period': 130, 'stoch_k_smooth': 39, 'stoch_d_period': 9, 'leverage': 4},
+    {'symbol': 'SKLUSDT', 'ma_period': 250, 'stoch_k_period': 125, 'stoch_k_smooth': 19, 'stoch_d_period': 37, 'leverage': 3},
+    {'symbol': 'C98USDT', 'ma_period': 202, 'stoch_k_period': 81, 'stoch_k_smooth': 42, 'stoch_d_period': 24, 'leverage': 2},
+    {'symbol': 'IOSTUSDT', 'ma_period': 317, 'stoch_k_period': 92, 'stoch_k_smooth': 77, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'CTSIUSDT', 'ma_period': 297, 'stoch_k_period': 141, 'stoch_k_smooth': 64, 'stoch_d_period': 50, 'leverage': 4},
+    {'symbol': 'ENJUSDT', 'ma_period': 145, 'stoch_k_period': 82, 'stoch_k_smooth': 9, 'stoch_d_period': 19, 'leverage': 3},
+    {'symbol': 'CFXUSDT', 'ma_period': 255, 'stoch_k_period': 90, 'stoch_k_smooth': 78, 'stoch_d_period': 8, 'leverage': 5},
+    {'symbol': 'IOTXUSDT', 'ma_period': 201, 'stoch_k_period': 149, 'stoch_k_smooth': 74, 'stoch_d_period': 18, 'leverage': 5},
+    {'symbol': 'VETUSDT', 'ma_period': 200, 'stoch_k_period': 91, 'stoch_k_smooth': 75, 'stoch_d_period': 29, 'leverage': 5},
+    {'symbol': '1000SHIBUSDT', 'ma_period': 283, 'stoch_k_period': 110, 'stoch_k_smooth': 7, 'stoch_d_period': 26, 'leverage': 5},
+    {'symbol': 'XVGUSDT', 'ma_period': 69, 'stoch_k_period': 81, 'stoch_k_smooth': 38, 'stoch_d_period': 10, 'leverage': 3},
+    {'symbol': 'GLMUSDT', 'ma_period': 75, 'stoch_k_period': 17, 'stoch_k_smooth': 11, 'stoch_d_period': 13, 'leverage': 5},
+    {'symbol': 'ANKRUSDT', 'ma_period': 340, 'stoch_k_period': 142, 'stoch_k_smooth': 62, 'stoch_d_period': 29, 'leverage': 5},
+    {'symbol': 'RVNUSDT', 'ma_period': 181, 'stoch_k_period': 108, 'stoch_k_smooth': 62, 'stoch_d_period': 30, 'leverage': 4},
+    {'symbol': 'ROSEUSDT', 'ma_period': 57, 'stoch_k_period': 33, 'stoch_k_smooth': 13, 'stoch_d_period': 9, 'leverage': 4},
+    {'symbol': 'AVAXUSDT', 'ma_period': 101, 'stoch_k_period': 57, 'stoch_k_smooth': 20, 'stoch_d_period': 24, 'leverage': 5},
+    {'symbol': 'KSMUSDT', 'ma_period': 283, 'stoch_k_period': 16, 'stoch_k_smooth': 7, 'stoch_d_period': 9, 'leverage': 3},
+    {'symbol': 'HOTUSDT', 'ma_period': 180, 'stoch_k_period': 115, 'stoch_k_smooth': 51, 'stoch_d_period': 45, 'leverage': 4},
+    {'symbol': 'ENSUSDT', 'ma_period': 249, 'stoch_k_period': 94, 'stoch_k_smooth': 29, 'stoch_d_period': 41, 'leverage': 4},
+    {'symbol': 'TUSDT', 'ma_period': 268, 'stoch_k_period': 17, 'stoch_k_smooth': 11, 'stoch_d_period': 23, 'leverage': 5},
+    {'symbol': 'IOTAUSDT', 'ma_period': 166, 'stoch_k_period': 146, 'stoch_k_smooth': 60, 'stoch_d_period': 50, 'leverage': 4},
+    {'symbol': 'GTCUSDT', 'ma_period': 224, 'stoch_k_period': 127, 'stoch_k_smooth': 80, 'stoch_d_period': 45, 'leverage': 3},
+    {'symbol': 'NEARUSDT', 'ma_period': 170, 'stoch_k_period': 116, 'stoch_k_smooth': 70, 'stoch_d_period': 28, 'leverage': 3},
+    {'symbol': 'TWTUSDT', 'ma_period': 320, 'stoch_k_period': 146, 'stoch_k_smooth': 43, 'stoch_d_period': 41, 'leverage': 5},
+    {'symbol': 'SPELLUSDT', 'ma_period': 229, 'stoch_k_period': 95, 'stoch_k_smooth': 57, 'stoch_d_period': 42, 'leverage': 4},
+    {'symbol': 'RSRUSDT', 'ma_period': 84, 'stoch_k_period': 148, 'stoch_k_smooth': 12, 'stoch_d_period': 47, 'leverage': 3},
+    {'symbol': 'FILUSDT', 'ma_period': 280, 'stoch_k_period': 16, 'stoch_k_smooth': 10, 'stoch_d_period': 8, 'leverage': 3},
+    {'symbol': 'TRUUSDT', 'ma_period': 271, 'stoch_k_period': 139, 'stoch_k_smooth': 72, 'stoch_d_period': 24, 'leverage': 5},
     {'symbol': 'GASUSDT', 'ma_period': 52, 'stoch_k_period': 134, 'stoch_k_smooth': 55, 'stoch_d_period': 24, 'leverage': 3},
-    {'symbol': 'SNXUSDT', 'ma_period': 38, 'stoch_k_period': 130, 'stoch_k_smooth': 57, 'stoch_d_period': 16, 'leverage': 2},
-    {'symbol': 'SUPERUSDT', 'ma_period': 87, 'stoch_k_period': 105, 'stoch_k_smooth': 40, 'stoch_d_period': 50, 'leverage': 1},
-    {'symbol': 'LDOUSDT', 'ma_period': 54, 'stoch_k_period': 134, 'stoch_k_smooth': 80, 'stoch_d_period': 7, 'leverage': 3},
-    {'symbol': 'GMXUSDT', 'ma_period': 128, 'stoch_k_period': 99, 'stoch_k_smooth': 78, 'stoch_d_period': 39, 'leverage': 3},
-    {'symbol': 'ZRXUSDT', 'ma_period': 179, 'stoch_k_period': 121, 'stoch_k_smooth': 54, 'stoch_d_period': 33, 'leverage': 3},
-    {'symbol': 'ATAUSDT', 'ma_period': 95, 'stoch_k_period': 148, 'stoch_k_smooth': 46, 'stoch_d_period': 20, 'leverage': 2},
-    {'symbol': 'XVSUSDT', 'ma_period': 65, 'stoch_k_period': 146, 'stoch_k_smooth': 74, 'stoch_d_period': 15, 'leverage': 2},
-    {'symbol': 'LPTUSDT', 'ma_period': 94, 'stoch_k_period': 62, 'stoch_k_smooth': 35, 'stoch_d_period': 22, 'leverage': 3},
-    {'symbol': 'EGLDUSDT', 'ma_period': 248, 'stoch_k_period': 127, 'stoch_k_smooth': 80, 'stoch_d_period': 31, 'leverage': 3},
-    {'symbol': 'CELOUSDT', 'ma_period': 179, 'stoch_k_period': 147, 'stoch_k_smooth': 57, 'stoch_d_period': 45, 'leverage': 2},
-    {'symbol': 'NMRUSDT', 'ma_period': 348, 'stoch_k_period': 137, 'stoch_k_smooth': 78, 'stoch_d_period': 25, 'leverage': 4},
-    {'symbol': 'DYDXUSDT', 'ma_period': 244, 'stoch_k_period': 34, 'stoch_k_smooth': 22, 'stoch_d_period': 26, 'leverage': 2},
-    {'symbol': 'QNTUSDT', 'ma_period': 288, 'stoch_k_period': 142, 'stoch_k_smooth': 54, 'stoch_d_period': 38, 'leverage': 4},
-    {'symbol': 'ARKUSDT', 'ma_period': 341, 'stoch_k_period': 149, 'stoch_k_smooth': 74, 'stoch_d_period': 44, 'leverage': 4},
-    {'symbol': 'RUNEUSDT', 'ma_period': 254, 'stoch_k_period': 40, 'stoch_k_smooth': 30, 'stoch_d_period': 45, 'leverage': 2},
-    {'symbol': 'APTUSDT', 'ma_period': 42, 'stoch_k_period': 150, 'stoch_k_smooth': 67, 'stoch_d_period': 16, 'leverage': 3},
-    {'symbol': 'XTZUSDT', 'ma_period': 252, 'stoch_k_period': 107, 'stoch_k_smooth': 55, 'stoch_d_period': 46, 'leverage': 5},
-    {'symbol': 'ARCUSDT', 'ma_period': 69, 'stoch_k_period': 84, 'stoch_k_smooth': 7, 'stoch_d_period': 46, 'leverage': 2},
-    {'symbol': 'ZILUSDT', 'ma_period': 319, 'stoch_k_period': 67, 'stoch_k_smooth': 20, 'stoch_d_period': 8, 'leverage': 3},
-    {'symbol': 'ARUSDT', 'ma_period': 141, 'stoch_k_period': 48, 'stoch_k_smooth': 28, 'stoch_d_period': 6, 'leverage': 2},
-    {'symbol': 'YFIUSDT', 'ma_period': 219, 'stoch_k_period': 113, 'stoch_k_smooth': 39, 'stoch_d_period': 43, 'leverage': 4},
-    {'symbol': 'ALGOUSDT', 'ma_period': 347, 'stoch_k_period': 149, 'stoch_k_smooth': 12, 'stoch_d_period': 26, 'leverage': 3},
-    {'symbol': 'DODOXUSDT', 'ma_period': 32, 'stoch_k_period': 149, 'stoch_k_smooth': 47, 'stoch_d_period': 15, 'leverage': 2},
-    {'symbol': 'ONTUSDT', 'ma_period': 127, 'stoch_k_period': 150, 'stoch_k_smooth': 60, 'stoch_d_period': 42, 'leverage': 3},
-    {'symbol': 'TAOUSDT', 'ma_period': 82, 'stoch_k_period': 119, 'stoch_k_smooth': 62, 'stoch_d_period': 18, 'leverage': 2},
-    {'symbol': 'ALICEUSDT', 'ma_period': 94, 'stoch_k_period': 54, 'stoch_k_smooth': 7, 'stoch_d_period': 24, 'leverage': 2},
-    {'symbol': 'COTIUSDT', 'ma_period': 271, 'stoch_k_period': 130, 'stoch_k_smooth': 32, 'stoch_d_period': 20, 'leverage': 3},
-    {'symbol': 'LRCUSDT', 'ma_period': 100, 'stoch_k_period': 143, 'stoch_k_smooth': 69, 'stoch_d_period': 43, 'leverage': 3},
-    {'symbol': 'CELRUSDT', 'ma_period': 91, 'stoch_k_period': 150, 'stoch_k_smooth': 32, 'stoch_d_period': 47, 'leverage': 2},
-    {'symbol': 'NEOUSDT', 'ma_period': 331, 'stoch_k_period': 96, 'stoch_k_smooth': 47, 'stoch_d_period': 34, 'leverage': 3},
-    {'symbol': 'KNCUSDT', 'ma_period': 77, 'stoch_k_period': 136, 'stoch_k_smooth': 32, 'stoch_d_period': 3, 'leverage': 2},
-    {'symbol': '1INCHUSDT', 'ma_period': 202, 'stoch_k_period': 106, 'stoch_k_smooth': 59, 'stoch_d_period': 30, 'leverage': 2},
-    {'symbol': 'MASKUSDT', 'ma_period': 125, 'stoch_k_period': 143, 'stoch_k_smooth': 68, 'stoch_d_period': 20, 'leverage': 4},
-    {'symbol': 'QTUMUSDT', 'ma_period': 223, 'stoch_k_period': 108, 'stoch_k_smooth': 60, 'stoch_d_period': 24, 'leverage': 3},
-    {'symbol': 'TRBUSDT', 'ma_period': 160, 'stoch_k_period': 102, 'stoch_k_smooth': 53, 'stoch_d_period': 12, 'leverage': 2},
-    {'symbol': 'THETAUSDT', 'ma_period': 98, 'stoch_k_period': 91, 'stoch_k_smooth': 69, 'stoch_d_period': 25, 'leverage': 3},
-    {'symbol': 'ETCUSDT', 'ma_period': 335, 'stoch_k_period': 84, 'stoch_k_smooth': 80, 'stoch_d_period': 36, 'leverage': 3},
-    {'symbol': 'DOTUSDT', 'ma_period': 210, 'stoch_k_period': 101, 'stoch_k_smooth': 46, 'stoch_d_period': 4, 'leverage': 2},
-    {'symbol': 'STORJUSDT', 'ma_period': 79, 'stoch_k_period': 44, 'stoch_k_smooth': 47, 'stoch_d_period': 15, 'leverage': 2},
-    {'symbol': 'ICPUSDT', 'ma_period': 39, 'stoch_k_period': 129, 'stoch_k_smooth': 69, 'stoch_d_period': 8, 'leverage': 3},
-    {'symbol': 'LQTYUSDT', 'ma_period': 220, 'stoch_k_period': 68, 'stoch_k_smooth': 59, 'stoch_d_period': 29, 'leverage': 3},
-    {'symbol': 'DUSKUSDT', 'ma_period': 108, 'stoch_k_period': 109, 'stoch_k_smooth': 64, 'stoch_d_period': 39, 'leverage': 2},
-    {'symbol': 'ACHUSDT', 'ma_period': 63, 'stoch_k_period': 83, 'stoch_k_smooth': 32, 'stoch_d_period': 48, 'leverage': 3},
-    {'symbol': 'AAVEUSDT', 'ma_period': 131, 'stoch_k_period': 131, 'stoch_k_smooth': 76, 'stoch_d_period': 29, 'leverage': 3},
-    {'symbol': 'XLMUSDT', 'ma_period': 293, 'stoch_k_period': 63, 'stoch_k_smooth': 75, 'stoch_d_period': 35, 'leverage': 3},
-    {'symbol': 'COMPUSDT', 'ma_period': 288, 'stoch_k_period': 130, 'stoch_k_smooth': 39, 'stoch_d_period': 22, 'leverage': 2},
-    {'symbol': 'STGUSDT', 'ma_period': 99, 'stoch_k_period': 121, 'stoch_k_smooth': 80, 'stoch_d_period': 35, 'leverage': 2},
-    {'symbol': 'BELUSDT', 'ma_period': 223, 'stoch_k_period': 135, 'stoch_k_smooth': 8, 'stoch_d_period': 11, 'leverage': 1},
-    {'symbol': 'JASMYUSDT', 'ma_period': 79, 'stoch_k_period': 80, 'stoch_k_smooth': 57, 'stoch_d_period': 21, 'leverage': 2},
-    {'symbol': 'GRTUSDT', 'ma_period': 109, 'stoch_k_period': 75, 'stoch_k_smooth': 27, 'stoch_d_period': 45, 'leverage': 1},
-    {'symbol': 'ATOMUSDT', 'ma_period': 62, 'stoch_k_period': 129, 'stoch_k_smooth': 58, 'stoch_d_period': 9, 'leverage': 2},
-    {'symbol': 'SCRTUSDT', 'ma_period': 72, 'stoch_k_period': 49, 'stoch_k_smooth': 5, 'stoch_d_period': 39, 'leverage': 1},
-    {'symbol': 'DENTUSDT', 'ma_period': 126, 'stoch_k_period': 143, 'stoch_k_smooth': 75, 'stoch_d_period': 23, 'leverage': 1},
-    {'symbol': 'TLMUSDT', 'ma_period': 92, 'stoch_k_period': 137, 'stoch_k_smooth': 60, 'stoch_d_period': 33, 'leverage': 1},
-    {'symbol': '1000RATSUSDT', 'ma_period': 63, 'stoch_k_period': 130, 'stoch_k_smooth': 67, 'stoch_d_period': 40, 'leverage': 1},
-    {'symbol': 'CHZUSDT', 'ma_period': 323, 'stoch_k_period': 117, 'stoch_k_smooth': 73, 'stoch_d_period': 44, 'leverage': 2},
-    {'symbol': 'ZENUSDT', 'ma_period': 298, 'stoch_k_period': 126, 'stoch_k_smooth': 11, 'stoch_d_period': 17, 'leverage': 1},
-    {'symbol': 'CHRUSDT', 'ma_period': 99, 'stoch_k_period': 150, 'stoch_k_smooth': 57, 'stoch_d_period': 44, 'leverage': 1},
-    {'symbol': 'INJUSDT', 'ma_period': 39, 'stoch_k_period': 143, 'stoch_k_smooth': 45, 'stoch_d_period': 25, 'leverage': 1},
-    {'symbol': 'SSVUSDT', 'ma_period': 200, 'stoch_k_period': 140, 'stoch_k_smooth': 62, 'stoch_d_period': 30, 'leverage': 1},
-    {'symbol': 'ZECUSDT', 'ma_period': 153, 'stoch_k_period': 81, 'stoch_k_smooth': 39, 'stoch_d_period': 11, 'leverage': 1},
-    {'symbol': 'CRVUSDT', 'ma_period': 222, 'stoch_k_period': 135, 'stoch_k_smooth': 35, 'stoch_d_period': 44, 'leverage': 1},
+    {'symbol': 'SNXUSDT', 'ma_period': 38, 'stoch_k_period': 133, 'stoch_k_smooth': 56, 'stoch_d_period': 20, 'leverage': 3},
+    {'symbol': 'SUPERUSDT', 'ma_period': 22, 'stoch_k_period': 150, 'stoch_k_smooth': 55, 'stoch_d_period': 45, 'leverage': 3},
+    {'symbol': 'LDOUSDT', 'ma_period': 37, 'stoch_k_period': 144, 'stoch_k_smooth': 79, 'stoch_d_period': 6, 'leverage': 3},
+    {'symbol': 'GMXUSDT', 'ma_period': 54, 'stoch_k_period': 14, 'stoch_k_smooth': 18, 'stoch_d_period': 6, 'leverage': 4},
+    {'symbol': 'ZRXUSDT', 'ma_period': 198, 'stoch_k_period': 120, 'stoch_k_smooth': 53, 'stoch_d_period': 39, 'leverage': 4},
+    {'symbol': 'ATAUSDT', 'ma_period': 94, 'stoch_k_period': 147, 'stoch_k_smooth': 75, 'stoch_d_period': 10, 'leverage': 3},
+    {'symbol': 'XVSUSDT', 'ma_period': 20, 'stoch_k_period': 17, 'stoch_k_smooth': 12, 'stoch_d_period': 20, 'leverage': 5},
+    {'symbol': 'LPTUSDT', 'ma_period': 84, 'stoch_k_period': 17, 'stoch_k_smooth': 57, 'stoch_d_period': 8, 'leverage': 3},
+    {'symbol': 'EGLDUSDT', 'ma_period': 241, 'stoch_k_period': 17, 'stoch_k_smooth': 15, 'stoch_d_period': 9, 'leverage': 2},
+    {'symbol': 'CELOUSDT', 'ma_period': 248, 'stoch_k_period': 124, 'stoch_k_smooth': 80, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'NMRUSDT', 'ma_period': 307, 'stoch_k_period': 116, 'stoch_k_smooth': 50, 'stoch_d_period': 7, 'leverage': 3},
+    {'symbol': 'DYDXUSDT', 'ma_period': 68, 'stoch_k_period': 38, 'stoch_k_smooth': 19, 'stoch_d_period': 28, 'leverage': 5},
+    {'symbol': 'QNTUSDT', 'ma_period': 262, 'stoch_k_period': 143, 'stoch_k_smooth': 58, 'stoch_d_period': 32, 'leverage': 4},
+    {'symbol': 'ARKUSDT', 'ma_period': 56, 'stoch_k_period': 89, 'stoch_k_smooth': 7, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'RUNEUSDT', 'ma_period': 290, 'stoch_k_period': 131, 'stoch_k_smooth': 28, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'APTUSDT', 'ma_period': 233, 'stoch_k_period': 79, 'stoch_k_smooth': 80, 'stoch_d_period': 6, 'leverage': 5},
+    {'symbol': 'XTZUSDT', 'ma_period': 348, 'stoch_k_period': 117, 'stoch_k_smooth': 58, 'stoch_d_period': 29, 'leverage': 4},
+    {'symbol': 'ARCUSDT', 'ma_period': 126, 'stoch_k_period': 150, 'stoch_k_smooth': 77, 'stoch_d_period': 45, 'leverage': 5},
+    {'symbol': 'ZILUSDT', 'ma_period': 283, 'stoch_k_period': 83, 'stoch_k_smooth': 7, 'stoch_d_period': 22, 'leverage': 4},
+    {'symbol': 'ARUSDT', 'ma_period': 289, 'stoch_k_period': 76, 'stoch_k_smooth': 9, 'stoch_d_period': 9, 'leverage': 4},
+    {'symbol': 'YFIUSDT', 'ma_period': 350, 'stoch_k_period': 149, 'stoch_k_smooth': 71, 'stoch_d_period': 41, 'leverage': 5},
+    {'symbol': 'ALGOUSDT', 'ma_period': 274, 'stoch_k_period': 121, 'stoch_k_smooth': 50, 'stoch_d_period': 24, 'leverage': 4},
+    {'symbol': 'DODOXUSDT', 'ma_period': 231, 'stoch_k_period': 142, 'stoch_k_smooth': 28, 'stoch_d_period': 25, 'leverage': 5},
+    {'symbol': 'ONTUSDT', 'ma_period': 350, 'stoch_k_period': 121, 'stoch_k_smooth': 70, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'TAOUSDT', 'ma_period': 88, 'stoch_k_period': 98, 'stoch_k_smooth': 16, 'stoch_d_period': 3, 'leverage': 5},
+    {'symbol': 'ALICEUSDT', 'ma_period': 175, 'stoch_k_period': 41, 'stoch_k_smooth': 6, 'stoch_d_period': 32, 'leverage': 5},
+    {'symbol': 'LRCUSDT', 'ma_period': 261, 'stoch_k_period': 129, 'stoch_k_smooth': 31, 'stoch_d_period': 50, 'leverage': 4},
+    {'symbol': 'NEOUSDT', 'ma_period': 330, 'stoch_k_period': 33, 'stoch_k_smooth': 72, 'stoch_d_period': 46, 'leverage': 5},
+    {'symbol': 'KNCUSDT', 'ma_period': 189, 'stoch_k_period': 52, 'stoch_k_smooth': 27, 'stoch_d_period': 19, 'leverage': 3},
+    {'symbol': '1INCHUSDT', 'ma_period': 240, 'stoch_k_period': 83, 'stoch_k_smooth': 28, 'stoch_d_period': 14, 'leverage': 5},
+    {'symbol': 'MASKUSDT', 'ma_period': 350, 'stoch_k_period': 150, 'stoch_k_smooth': 67, 'stoch_d_period': 30, 'leverage': 4},
+    {'symbol': 'QTUMUSDT', 'ma_period': 234, 'stoch_k_period': 109, 'stoch_k_smooth': 50, 'stoch_d_period': 48, 'leverage': 3},
+    {'symbol': 'TRBUSDT', 'ma_period': 239, 'stoch_k_period': 114, 'stoch_k_smooth': 28, 'stoch_d_period': 48, 'leverage': 2},
+    {'symbol': 'THETAUSDT', 'ma_period': 336, 'stoch_k_period': 117, 'stoch_k_smooth': 72, 'stoch_d_period': 27, 'leverage': 4},
+    {'symbol': 'ETCUSDT', 'ma_period': 339, 'stoch_k_period': 134, 'stoch_k_smooth': 43, 'stoch_d_period': 26, 'leverage': 5},
+    {'symbol': 'DOTUSDT', 'ma_period': 139, 'stoch_k_period': 32, 'stoch_k_smooth': 79, 'stoch_d_period': 15, 'leverage': 3},
+    {'symbol': 'STORJUSDT', 'ma_period': 114, 'stoch_k_period': 51, 'stoch_k_smooth': 34, 'stoch_d_period': 33, 'leverage': 3},
+    {'symbol': 'ICPUSDT', 'ma_period': 297, 'stoch_k_period': 150, 'stoch_k_smooth': 60, 'stoch_d_period': 13, 'leverage': 5},
+    {'symbol': 'LQTYUSDT', 'ma_period': 80, 'stoch_k_period': 75, 'stoch_k_smooth': 59, 'stoch_d_period': 30, 'leverage': 4},
+    {'symbol': 'DUSKUSDT', 'ma_period': 108, 'stoch_k_period': 109, 'stoch_k_smooth': 64, 'stoch_d_period': 38, 'leverage': 3},
+    {'symbol': 'ACHUSDT', 'ma_period': 157, 'stoch_k_period': 149, 'stoch_k_smooth': 78, 'stoch_d_period': 47, 'leverage': 5},
+    {'symbol': 'AAVEUSDT', 'ma_period': 153, 'stoch_k_period': 97, 'stoch_k_smooth': 65, 'stoch_d_period': 50, 'leverage': 2},
+    {'symbol': 'XLMUSDT', 'ma_period': 335, 'stoch_k_period': 84, 'stoch_k_smooth': 74, 'stoch_d_period': 50, 'leverage': 4},
+    {'symbol': 'COMPUSDT', 'ma_period': 314, 'stoch_k_period': 94, 'stoch_k_smooth': 38, 'stoch_d_period': 18, 'leverage': 3},
+    {'symbol': 'STGUSDT', 'ma_period': 59, 'stoch_k_period': 91, 'stoch_k_smooth': 49, 'stoch_d_period': 5, 'leverage': 5},
+    {'symbol': 'BELUSDT', 'ma_period': 221, 'stoch_k_period': 146, 'stoch_k_smooth': 10, 'stoch_d_period': 12, 'leverage': 2},
+    {'symbol': 'JASMYUSDT', 'ma_period': 279, 'stoch_k_period': 112, 'stoch_k_smooth': 70, 'stoch_d_period': 49, 'leverage': 5},
+    {'symbol': 'GRTUSDT', 'ma_period': 350, 'stoch_k_period': 122, 'stoch_k_smooth': 80, 'stoch_d_period': 33, 'leverage': 4},
+    {'symbol': 'ATOMUSDT', 'ma_period': 62, 'stoch_k_period': 103, 'stoch_k_smooth': 31, 'stoch_d_period': 36, 'leverage': 1},
+    {'symbol': 'SCRTUSDT', 'ma_period': 66, 'stoch_k_period': 100, 'stoch_k_smooth': 7, 'stoch_d_period': 15, 'leverage': 5},
+    {'symbol': 'TLMUSDT', 'ma_period': 69, 'stoch_k_period': 17, 'stoch_k_smooth': 35, 'stoch_d_period': 3, 'leverage': 3},
+    {'symbol': '1000RATSUSDT', 'ma_period': 28, 'stoch_k_period': 149, 'stoch_k_smooth': 78, 'stoch_d_period': 16, 'leverage': 4},
+    {'symbol': 'CHZUSDT', 'ma_period': 102, 'stoch_k_period': 47, 'stoch_k_smooth': 22, 'stoch_d_period': 19, 'leverage': 2},
+    {'symbol': 'ZENUSDT', 'ma_period': 190, 'stoch_k_period': 89, 'stoch_k_smooth': 8, 'stoch_d_period': 22, 'leverage': 2},
+    {'symbol': 'CHRUSDT', 'ma_period': 59, 'stoch_k_period': 46, 'stoch_k_smooth': 7, 'stoch_d_period': 4, 'leverage': 2},
+    {'symbol': 'INJUSDT', 'ma_period': 157, 'stoch_k_period': 141, 'stoch_k_smooth': 76, 'stoch_d_period': 50, 'leverage': 3},
+    {'symbol': 'SSVUSDT', 'ma_period': 267, 'stoch_k_period': 74, 'stoch_k_smooth': 76, 'stoch_d_period': 48, 'leverage': 5},
+    {'symbol': 'ZECUSDT', 'ma_period': 175, 'stoch_k_period': 25, 'stoch_k_smooth': 36, 'stoch_d_period': 39, 'leverage': 3},
+    {'symbol': 'CRVUSDT', 'ma_period': 327, 'stoch_k_period': 65, 'stoch_k_smooth': 68, 'stoch_d_period': 4, 'leverage': 1},
 ]
 
 # Futures 매매 제외 코인 (CSV 필터링 완료 - 별도 제외 불필요)
 FUTURES_EXCLUDED_COINS = []
 
 # ============================================================
-# USDS-M Futures 롱 포지션 설정 (optimize_long_fixed.py 결과 2026-02-09)
-# ============================================================
-# 숏 289개 중 롱 CAGR >= 25%인 231개 코인
-# 숏 필터: 숏 시그널 발생 시 롱 진입 금지
-# 비용 반영: 수수료 0.04%, 슬리피지 0.05%, 펀딩비 0.01%/8h (노셔널 기준)
+# USDS-M Futures 롱 포지션 설정 (롱/숏 우선 최적화 반영 2026-04-30)
 # ============================================================
 
 LONG_TRADING_CONFIGS = [
-    {'symbol': 'PIPPINUSDT', 'short_ma': 191, 'short_sk': 150, 'short_sks': 76, 'short_sd': 48, 'long_ma': 74, 'long_sk': 61, 'long_sks': 19, 'long_sd': 22, 'long_lev': 4},
-    {'symbol': 'ARCUSDT', 'short_ma': 69, 'short_sk': 84, 'short_sks': 7, 'short_sd': 46, 'long_ma': 194, 'long_sk': 148, 'long_sks': 80, 'long_sd': 50, 'long_lev': 5},
-    {'symbol': 'HIPPOUSDT', 'short_ma': 87, 'short_sk': 146, 'short_sks': 73, 'short_sd': 43, 'long_ma': 91, 'long_sk': 92, 'long_sks': 50, 'long_sd': 43, 'long_lev': 3},
-    {'symbol': 'BIOUSDT', 'short_ma': 272, 'short_sk': 39, 'short_sks': 6, 'short_sd': 45, 'long_ma': 20, 'long_sk': 141, 'long_sks': 60, 'long_sd': 17, 'long_lev': 4},
-    {'symbol': 'MOODENGUSDT', 'short_ma': 245, 'short_sk': 28, 'short_sks': 12, 'short_sd': 4, 'long_ma': 122, 'long_sk': 71, 'long_sks': 72, 'long_sd': 30, 'long_lev': 5},
-    {'symbol': 'VVVUSDT', 'short_ma': 129, 'short_sk': 104, 'short_sks': 73, 'short_sd': 36, 'long_ma': 113, 'long_sk': 68, 'long_sks': 57, 'long_sd': 43, 'long_lev': 5},
-    {'symbol': 'MELANIAUSDT', 'short_ma': 184, 'short_sk': 146, 'short_sks': 71, 'short_sd': 32, 'long_ma': 40, 'long_sk': 137, 'long_sks': 77, 'long_sd': 42, 'long_lev': 5},
-    {'symbol': 'THEUSDT', 'short_ma': 116, 'short_sk': 113, 'short_sks': 70, 'short_sd': 46, 'long_ma': 213, 'long_sk': 26, 'long_sks': 27, 'long_sd': 33, 'long_lev': 5},
-    {'symbol': 'ALCHUSDT', 'short_ma': 298, 'short_sk': 48, 'short_sks': 7, 'short_sd': 41, 'long_ma': 254, 'long_sk': 147, 'long_sks': 54, 'long_sd': 36, 'long_lev': 5},
-    {'symbol': 'FARTCOINUSDT', 'short_ma': 188, 'short_sk': 123, 'short_sks': 61, 'short_sd': 6, 'long_ma': 74, 'long_sk': 90, 'long_sks': 80, 'long_sd': 22, 'long_lev': 4},
-    {'symbol': 'GRIFFAINUSDT', 'short_ma': 135, 'short_sk': 149, 'short_sks': 79, 'short_sd': 47, 'long_ma': 94, 'long_sk': 92, 'long_sks': 79, 'long_sd': 37, 'long_lev': 3},
-    {'symbol': '1000PEPEUSDT', 'short_ma': 48, 'short_sk': 25, 'short_sks': 24, 'short_sd': 31, 'long_ma': 297, 'long_sk': 100, 'long_sks': 10, 'long_sd': 10, 'long_lev': 4},
-    {'symbol': 'AEROUSDT', 'short_ma': 30, 'short_sk': 148, 'short_sks': 63, 'short_sd': 34, 'long_ma': 272, 'long_sk': 142, 'long_sks': 60, 'long_sd': 42, 'long_lev': 5},
-    {'symbol': 'BANANAUSDT', 'short_ma': 270, 'short_sk': 133, 'short_sks': 63, 'short_sd': 39, 'long_ma': 46, 'long_sk': 146, 'long_sks': 59, 'long_sd': 43, 'long_lev': 5},
-    {'symbol': 'TRUMPUSDT', 'short_ma': 54, 'short_sk': 144, 'short_sks': 79, 'short_sd': 17, 'long_ma': 86, 'long_sk': 122, 'long_sks': 66, 'long_sd': 32, 'long_lev': 5},
-    {'symbol': 'VIRTUALUSDT', 'short_ma': 156, 'short_sk': 108, 'short_sks': 36, 'short_sd': 47, 'long_ma': 127, 'long_sk': 112, 'long_sks': 52, 'long_sd': 50, 'long_lev': 5},
-    {'symbol': 'POPCATUSDT', 'short_ma': 213, 'short_sk': 91, 'short_sks': 45, 'short_sd': 5, 'long_ma': 246, 'long_sk': 93, 'long_sks': 79, 'long_sd': 50, 'long_lev': 5},
-    {'symbol': '1000CATUSDT', 'short_ma': 41, 'short_sk': 42, 'short_sks': 13, 'short_sd': 16, 'long_ma': 195, 'long_sk': 67, 'long_sks': 75, 'long_sd': 29, 'long_lev': 5},
-    {'symbol': 'SANTOSUSDT', 'short_ma': 179, 'short_sk': 103, 'short_sks': 62, 'short_sd': 39, 'long_ma': 162, 'long_sk': 72, 'long_sks': 79, 'long_sd': 3, 'long_lev': 5},
-    {'symbol': 'ZKUSDT', 'short_ma': 84, 'short_sk': 95, 'short_sks': 57, 'short_sd': 41, 'long_ma': 58, 'long_sk': 80, 'long_sks': 15, 'long_sd': 46, 'long_lev': 5},
-    {'symbol': 'OMUSDT', 'short_ma': 347, 'short_sk': 142, 'short_sks': 18, 'short_sd': 8, 'long_ma': 276, 'long_sk': 38, 'long_sks': 5, 'long_sd': 26, 'long_lev': 5},
-    {'symbol': 'SYNUSDT', 'short_ma': 129, 'short_sk': 107, 'short_sks': 25, 'short_sd': 25, 'long_ma': 40, 'long_sk': 44, 'long_sks': 25, 'long_sd': 16, 'long_lev': 4},
-    {'symbol': 'AKTUSDT', 'short_ma': 323, 'short_sk': 100, 'short_sks': 13, 'short_sd': 13, 'long_ma': 61, 'long_sk': 15, 'long_sks': 18, 'long_sd': 35, 'long_lev': 4},
-    {'symbol': 'SUNUSDT', 'short_ma': 36, 'short_sk': 140, 'short_sks': 68, 'short_sd': 20, 'long_ma': 278, 'long_sk': 139, 'long_sks': 57, 'long_sd': 43, 'long_lev': 5},
-    {'symbol': 'HIGHUSDT', 'short_ma': 289, 'short_sk': 145, 'short_sks': 63, 'short_sd': 44, 'long_ma': 73, 'long_sk': 78, 'long_sks': 79, 'long_sd': 39, 'long_lev': 5},
-    {'symbol': 'KMNOUSDT', 'short_ma': 75, 'short_sk': 149, 'short_sks': 69, 'short_sd': 38, 'long_ma': 289, 'long_sk': 30, 'long_sks': 21, 'long_sd': 24, 'long_lev': 5},
-    {'symbol': 'MORPHOUSDT', 'short_ma': 312, 'short_sk': 27, 'short_sks': 39, 'short_sd': 6, 'long_ma': 37, 'long_sk': 104, 'long_sks': 48, 'long_sd': 37, 'long_lev': 5},
-    {'symbol': 'DIAUSDT', 'short_ma': 217, 'short_sk': 35, 'short_sks': 21, 'short_sd': 40, 'long_ma': 326, 'long_sk': 149, 'long_sks': 20, 'long_sd': 34, 'long_lev': 5},
-    {'symbol': 'CKBUSDT', 'short_ma': 217, 'short_sk': 146, 'short_sks': 65, 'short_sd': 47, 'long_ma': 72, 'long_sk': 147, 'long_sks': 15, 'long_sd': 34, 'long_lev': 5},
-    {'symbol': '1000FLOKIUSDT', 'short_ma': 128, 'short_sk': 106, 'short_sks': 70, 'short_sd': 47, 'long_ma': 316, 'long_sk': 89, 'long_sks': 31, 'long_sd': 4, 'long_lev': 4},
-    {'symbol': 'XVGUSDT', 'short_ma': 70, 'short_sk': 121, 'short_sks': 43, 'short_sd': 18, 'long_ma': 20, 'long_sk': 124, 'long_sks': 67, 'long_sd': 3, 'long_lev': 3},
-    {'symbol': 'MEWUSDT', 'short_ma': 54, 'short_sk': 113, 'short_sks': 46, 'short_sd': 44, 'long_ma': 45, 'long_sk': 117, 'long_sks': 74, 'long_sd': 36, 'long_lev': 5},
-    {'symbol': 'JASMYUSDT', 'short_ma': 79, 'short_sk': 80, 'short_sks': 57, 'short_sd': 21, 'long_ma': 198, 'long_sk': 47, 'long_sks': 21, 'long_sd': 8, 'long_lev': 4},
-    {'symbol': 'GOATUSDT', 'short_ma': 185, 'short_sk': 119, 'short_sks': 50, 'short_sd': 37, 'long_ma': 102, 'long_sk': 148, 'long_sks': 77, 'long_sd': 35, 'long_lev': 5},
-    {'symbol': 'WLDUSDT', 'short_ma': 219, 'short_sk': 123, 'short_sks': 17, 'short_sd': 4, 'long_ma': 299, 'long_sk': 37, 'long_sks': 12, 'long_sd': 26, 'long_lev': 4},
-    {'symbol': 'VANRYUSDT', 'short_ma': 115, 'short_sk': 148, 'short_sks': 60, 'short_sd': 46, 'long_ma': 53, 'long_sk': 111, 'long_sks': 13, 'long_sd': 17, 'long_lev': 4},
-    {'symbol': 'BERAUSDT', 'short_ma': 32, 'short_sk': 117, 'short_sks': 52, 'short_sd': 42, 'long_ma': 139, 'long_sk': 55, 'long_sks': 48, 'long_sd': 18, 'long_lev': 4},
-    {'symbol': 'PENDLEUSDT', 'short_ma': 153, 'short_sk': 73, 'short_sks': 70, 'short_sd': 50, 'long_ma': 246, 'long_sk': 131, 'long_sks': 76, 'long_sd': 35, 'long_lev': 5},
-    {'symbol': 'NEIROUSDT', 'short_ma': 289, 'short_sk': 104, 'short_sks': 58, 'short_sd': 6, 'long_ma': 127, 'long_sk': 77, 'long_sks': 71, 'long_sd': 48, 'long_lev': 5},
-    {'symbol': 'ZEREBROUSDT', 'short_ma': 296, 'short_sk': 70, 'short_sks': 39, 'short_sd': 36, 'long_ma': 61, 'long_sk': 144, 'long_sks': 66, 'long_sd': 40, 'long_lev': 4},
-    {'symbol': 'DEGENUSDT', 'short_ma': 70, 'short_sk': 150, 'short_sks': 57, 'short_sd': 16, 'long_ma': 73, 'long_sk': 82, 'long_sks': 72, 'long_sd': 39, 'long_lev': 5},
-    {'symbol': 'SUIUSDT', 'short_ma': 312, 'short_sk': 148, 'short_sks': 80, 'short_sd': 50, 'long_ma': 289, 'long_sk': 14, 'long_sks': 35, 'long_sd': 8, 'long_lev': 3},
-    {'symbol': 'FETUSDT', 'short_ma': 62, 'short_sk': 81, 'short_sks': 52, 'short_sd': 49, 'long_ma': 299, 'long_sk': 20, 'long_sks': 13, 'long_sd': 50, 'long_lev': 4},
-    {'symbol': '1000BONKUSDT', 'short_ma': 331, 'short_sk': 123, 'short_sks': 68, 'short_sd': 50, 'long_ma': 202, 'long_sk': 91, 'long_sks': 14, 'long_sd': 10, 'long_lev': 3},
-    {'symbol': 'AIXBTUSDT', 'short_ma': 132, 'short_sk': 140, 'short_sks': 22, 'short_sd': 46, 'long_ma': 67, 'long_sk': 83, 'long_sks': 77, 'long_sd': 32, 'long_lev': 5},
-    {'symbol': 'ETHWUSDT', 'short_ma': 350, 'short_sk': 116, 'short_sks': 76, 'short_sd': 47, 'long_ma': 281, 'long_sk': 45, 'long_sks': 28, 'long_sd': 8, 'long_lev': 5},
-    {'symbol': '1000000MOGUSDT', 'short_ma': 144, 'short_sk': 115, 'short_sks': 77, 'short_sd': 46, 'long_ma': 298, 'long_sk': 52, 'long_sks': 15, 'long_sd': 11, 'long_lev': 5},
-    {'symbol': 'WUSDT', 'short_ma': 86, 'short_sk': 118, 'short_sks': 64, 'short_sd': 28, 'long_ma': 168, 'long_sk': 29, 'long_sks': 19, 'long_sd': 49, 'long_lev': 5},
-    {'symbol': 'RPLUSDT', 'short_ma': 121, 'short_sk': 111, 'short_sks': 15, 'short_sd': 37, 'long_ma': 287, 'long_sk': 109, 'long_sks': 56, 'long_sd': 40, 'long_lev': 5},
-    {'symbol': 'RAREUSDT', 'short_ma': 171, 'short_sk': 75, 'short_sks': 77, 'short_sd': 20, 'long_ma': 36, 'long_sk': 102, 'long_sks': 35, 'long_sd': 10, 'long_lev': 5},
-    {'symbol': 'POLUSDT', 'short_ma': 226, 'short_sk': 25, 'short_sks': 15, 'short_sd': 42, 'long_ma': 274, 'long_sk': 111, 'long_sks': 10, 'long_sd': 13, 'long_lev': 5},
-    {'symbol': 'STXUSDT', 'short_ma': 93, 'short_sk': 148, 'short_sks': 74, 'short_sd': 48, 'long_ma': 275, 'long_sk': 19, 'long_sks': 17, 'long_sd': 12, 'long_lev': 3},
-    {'symbol': 'SUPERUSDT', 'short_ma': 87, 'short_sk': 105, 'short_sks': 40, 'short_sd': 50, 'long_ma': 210, 'long_sk': 83, 'long_sks': 76, 'long_sd': 36, 'long_lev': 5},
-    {'symbol': 'SCRUSDT', 'short_ma': 168, 'short_sk': 133, 'short_sks': 75, 'short_sd': 30, 'long_ma': 56, 'long_sk': 113, 'long_sks': 65, 'long_sd': 25, 'long_lev': 5},
-    {'symbol': 'MINAUSDT', 'short_ma': 346, 'short_sk': 55, 'short_sks': 32, 'short_sd': 9, 'long_ma': 51, 'long_sk': 115, 'long_sks': 76, 'long_sd': 38, 'long_lev': 5},
-    {'symbol': 'ARBUSDT', 'short_ma': 205, 'short_sk': 150, 'short_sks': 67, 'short_sd': 15, 'long_ma': 54, 'long_sk': 141, 'long_sks': 55, 'long_sd': 35, 'long_lev': 5},
-    {'symbol': 'ONDOUSDT', 'short_ma': 313, 'short_sk': 89, 'short_sks': 80, 'short_sd': 27, 'long_ma': 85, 'long_sk': 35, 'long_sks': 18, 'long_sd': 21, 'long_lev': 5},
-    {'symbol': 'RENDERUSDT', 'short_ma': 157, 'short_sk': 44, 'short_sks': 57, 'short_sd': 13, 'long_ma': 231, 'long_sk': 17, 'long_sks': 12, 'long_sd': 3, 'long_lev': 4},
-    {'symbol': 'DEXEUSDT', 'short_ma': 86, 'short_sk': 150, 'short_sks': 37, 'short_sd': 24, 'long_ma': 22, 'long_sk': 132, 'long_sks': 66, 'long_sd': 22, 'long_lev': 5},
-    {'symbol': 'ENAUSDT', 'short_ma': 203, 'short_sk': 144, 'short_sks': 54, 'short_sd': 48, 'long_ma': 232, 'long_sk': 16, 'long_sks': 28, 'long_sd': 25, 'long_lev': 3},
-    {'symbol': 'EIGENUSDT', 'short_ma': 37, 'short_sk': 145, 'short_sks': 79, 'short_sd': 50, 'long_ma': 109, 'long_sk': 50, 'long_sks': 70, 'long_sd': 34, 'long_lev': 3},
-    {'symbol': 'PNUTUSDT', 'short_ma': 155, 'short_sk': 122, 'short_sks': 53, 'short_sd': 48, 'long_ma': 247, 'long_sk': 109, 'long_sks': 64, 'long_sd': 37, 'long_lev': 5},
-    {'symbol': 'AVAXUSDT', 'short_ma': 96, 'short_sk': 60, 'short_sks': 35, 'short_sd': 8, 'long_ma': 290, 'long_sk': 40, 'long_sks': 10, 'long_sd': 12, 'long_lev': 2},
-    {'symbol': 'WIFUSDT', 'short_ma': 183, 'short_sk': 96, 'short_sks': 57, 'short_sd': 29, 'long_ma': 322, 'long_sk': 128, 'long_sks': 26, 'long_sd': 16, 'long_lev': 4},
-    {'symbol': 'CETUSUSDT', 'short_ma': 170, 'short_sk': 21, 'short_sks': 41, 'short_sd': 20, 'long_ma': 194, 'long_sk': 97, 'long_sks': 62, 'long_sd': 10, 'long_lev': 5},
-    {'symbol': 'TURBOUSDT', 'short_ma': 82, 'short_sk': 89, 'short_sks': 77, 'short_sd': 45, 'long_ma': 216, 'long_sk': 148, 'long_sks': 40, 'long_sd': 32, 'long_lev': 5},
-    {'symbol': 'DOGSUSDT', 'short_ma': 37, 'short_sk': 25, 'short_sks': 24, 'short_sd': 50, 'long_ma': 217, 'long_sk': 88, 'long_sks': 72, 'long_sd': 47, 'long_lev': 5},
-    {'symbol': 'MOVRUSDT', 'short_ma': 258, 'short_sk': 128, 'short_sks': 53, 'short_sd': 40, 'long_ma': 93, 'long_sk': 31, 'long_sks': 32, 'long_sd': 14, 'long_lev': 5},
-    {'symbol': 'CAKEUSDT', 'short_ma': 35, 'short_sk': 110, 'short_sks': 77, 'short_sd': 25, 'long_ma': 20, 'long_sk': 83, 'long_sks': 80, 'long_sd': 40, 'long_lev': 4},
-    {'symbol': 'PORTALUSDT', 'short_ma': 161, 'short_sk': 142, 'short_sks': 74, 'short_sd': 31, 'long_ma': 60, 'long_sk': 39, 'long_sks': 15, 'long_sd': 18, 'long_lev': 5},
-    {'symbol': 'LUNA2USDT', 'short_ma': 237, 'short_sk': 137, 'short_sks': 10, 'short_sd': 25, 'long_ma': 64, 'long_sk': 120, 'long_sks': 56, 'long_sd': 42, 'long_lev': 4},
-    {'symbol': 'ANIMEUSDT', 'short_ma': 290, 'short_sk': 149, 'short_sks': 80, 'short_sd': 32, 'long_ma': 279, 'long_sk': 24, 'long_sks': 20, 'long_sd': 25, 'long_lev': 5},
-    {'symbol': 'SEIUSDT', 'short_ma': 192, 'short_sk': 119, 'short_sks': 66, 'short_sd': 42, 'long_ma': 61, 'long_sk': 82, 'long_sks': 65, 'long_sd': 4, 'long_lev': 5},
-    {'symbol': 'ETHFIUSDT', 'short_ma': 350, 'short_sk': 146, 'short_sks': 62, 'short_sd': 11, 'long_ma': 90, 'long_sk': 93, 'long_sks': 19, 'long_sd': 15, 'long_lev': 4},
-    {'symbol': 'CFXUSDT', 'short_ma': 159, 'short_sk': 82, 'short_sks': 70, 'short_sd': 25, 'long_ma': 295, 'long_sk': 127, 'long_sks': 57, 'long_sd': 37, 'long_lev': 4},
-    {'symbol': 'SYSUSDT', 'short_ma': 162, 'short_sk': 64, 'short_sks': 5, 'short_sd': 42, 'long_ma': 39, 'long_sk': 138, 'long_sks': 28, 'long_sd': 22, 'long_lev': 5},
-    {'symbol': 'MBOXUSDT', 'short_ma': 61, 'short_sk': 106, 'short_sks': 59, 'short_sd': 29, 'long_ma': 70, 'long_sk': 113, 'long_sks': 14, 'long_sd': 40, 'long_lev': 5},
-    {'symbol': 'TNSRUSDT', 'short_ma': 268, 'short_sk': 103, 'short_sks': 70, 'short_sd': 34, 'long_ma': 290, 'long_sk': 36, 'long_sks': 5, 'long_sd': 6, 'long_lev': 2},
-    {'symbol': 'GLMUSDT', 'short_ma': 86, 'short_sk': 77, 'short_sks': 29, 'short_sd': 17, 'long_ma': 67, 'long_sk': 124, 'long_sks': 80, 'long_sd': 41, 'long_lev': 5},
-    {'symbol': 'BIGTIMEUSDT', 'short_ma': 163, 'short_sk': 80, 'short_sks': 57, 'short_sd': 8, 'long_ma': 49, 'long_sk': 112, 'long_sks': 80, 'long_sd': 45, 'long_lev': 5},
-    {'symbol': 'VETUSDT', 'short_ma': 202, 'short_sk': 116, 'short_sks': 73, 'short_sd': 32, 'long_ma': 223, 'long_sk': 33, 'long_sks': 7, 'long_sd': 50, 'long_lev': 4},
-    {'symbol': 'BNTUSDT', 'short_ma': 292, 'short_sk': 120, 'short_sks': 80, 'short_sd': 50, 'long_ma': 273, 'long_sk': 62, 'long_sks': 12, 'long_sd': 8, 'long_lev': 4},
-    {'symbol': 'ARKMUSDT', 'short_ma': 144, 'short_sk': 82, 'short_sks': 26, 'short_sd': 35, 'long_ma': 53, 'long_sk': 132, 'long_sks': 37, 'long_sd': 5, 'long_lev': 2},
-    {'symbol': 'BOMEUSDT', 'short_ma': 93, 'short_sk': 148, 'short_sks': 54, 'short_sd': 37, 'long_ma': 142, 'long_sk': 30, 'long_sks': 40, 'long_sd': 9, 'long_lev': 3},
-    {'symbol': 'CGPTUSDT', 'short_ma': 112, 'short_sk': 150, 'short_sks': 60, 'short_sd': 27, 'long_ma': 36, 'long_sk': 134, 'long_sks': 76, 'long_sd': 50, 'long_lev': 3},
-    {'symbol': 'NFPUSDT', 'short_ma': 132, 'short_sk': 128, 'short_sks': 69, 'short_sd': 45, 'long_ma': 52, 'long_sk': 21, 'long_sks': 31, 'long_sd': 10, 'long_lev': 2},
-    {'symbol': 'AUCTIONUSDT', 'short_ma': 250, 'short_sk': 142, 'short_sks': 28, 'short_sd': 16, 'long_ma': 23, 'long_sk': 150, 'long_sks': 40, 'long_sd': 20, 'long_lev': 3},
-    {'symbol': 'TRUUSDT', 'short_ma': 111, 'short_sk': 135, 'short_sks': 18, 'short_sd': 41, 'long_ma': 173, 'long_sk': 130, 'long_sks': 35, 'long_sd': 6, 'long_lev': 3},
-    {'symbol': 'ROSEUSDT', 'short_ma': 142, 'short_sk': 147, 'short_sks': 73, 'short_sd': 45, 'long_ma': 73, 'long_sk': 47, 'long_sks': 27, 'long_sd': 18, 'long_lev': 2},
-    {'symbol': 'WAXPUSDT', 'short_ma': 167, 'short_sk': 139, 'short_sks': 70, 'short_sd': 35, 'long_ma': 68, 'long_sk': 34, 'long_sks': 16, 'long_sd': 42, 'long_lev': 5},
-    {'symbol': 'ENSUSDT', 'short_ma': 128, 'short_sk': 138, 'short_sks': 60, 'short_sd': 45, 'long_ma': 301, 'long_sk': 15, 'long_sks': 38, 'long_sd': 7, 'long_lev': 3},
-    {'symbol': 'RSRUSDT', 'short_ma': 84, 'short_sk': 115, 'short_sks': 62, 'short_sd': 20, 'long_ma': 45, 'long_sk': 50, 'long_sks': 24, 'long_sd': 22, 'long_lev': 3},
-    {'symbol': 'INJUSDT', 'short_ma': 39, 'short_sk': 143, 'short_sks': 45, 'short_sd': 25, 'long_ma': 239, 'long_sk': 23, 'long_sks': 18, 'long_sd': 7, 'long_lev': 2},
-    {'symbol': 'MAGICUSDT', 'short_ma': 275, 'short_sk': 144, 'short_sks': 72, 'short_sd': 34, 'long_ma': 85, 'long_sk': 25, 'long_sks': 57, 'long_sd': 50, 'long_lev': 4},
-    {'symbol': 'SSVUSDT', 'short_ma': 200, 'short_sk': 140, 'short_sks': 62, 'short_sd': 30, 'long_ma': 75, 'long_sk': 18, 'long_sks': 12, 'long_sd': 42, 'long_lev': 3},
-    {'symbol': 'SPXUSDT', 'short_ma': 62, 'short_sk': 148, 'short_sks': 75, 'short_sd': 17, 'long_ma': 51, 'long_sk': 75, 'long_sks': 74, 'long_sd': 40, 'long_lev': 5},
-    {'symbol': 'COSUSDT', 'short_ma': 343, 'short_sk': 149, 'short_sks': 75, 'short_sd': 50, 'long_ma': 35, 'long_sk': 131, 'long_sks': 15, 'long_sd': 24, 'long_lev': 5},
-    {'symbol': 'DUSDT', 'short_ma': 325, 'short_sk': 145, 'short_sks': 57, 'short_sd': 46, 'long_ma': 208, 'long_sk': 82, 'long_sks': 56, 'long_sd': 42, 'long_lev': 3},
-    {'symbol': '1MBABYDOGEUSDT', 'short_ma': 76, 'short_sk': 79, 'short_sks': 9, 'short_sd': 7, 'long_ma': 230, 'long_sk': 146, 'long_sks': 61, 'long_sd': 26, 'long_lev': 5},
-    {'symbol': 'LRCUSDT', 'short_ma': 100, 'short_sk': 143, 'short_sks': 69, 'short_sd': 43, 'long_ma': 214, 'long_sk': 17, 'long_sks': 21, 'long_sd': 33, 'long_lev': 2},
-    {'symbol': 'CELRUSDT', 'short_ma': 91, 'short_sk': 150, 'short_sks': 32, 'short_sd': 47, 'long_ma': 60, 'long_sk': 103, 'long_sks': 31, 'long_sd': 30, 'long_lev': 4},
-    {'symbol': 'TAOUSDT', 'short_ma': 82, 'short_sk': 119, 'short_sks': 62, 'short_sd': 18, 'long_ma': 140, 'long_sk': 130, 'long_sks': 16, 'long_sd': 21, 'long_lev': 5},
-    {'symbol': 'POWRUSDT', 'short_ma': 183, 'short_sk': 146, 'short_sks': 69, 'short_sd': 25, 'long_ma': 36, 'long_sk': 139, 'long_sks': 12, 'long_sd': 36, 'long_lev': 4},
-    {'symbol': 'PHBUSDT', 'short_ma': 144, 'short_sk': 149, 'short_sks': 76, 'short_sd': 22, 'long_ma': 275, 'long_sk': 94, 'long_sks': 22, 'long_sd': 27, 'long_lev': 3},
-    {'symbol': 'ZILUSDT', 'short_ma': 319, 'short_sk': 67, 'short_sks': 20, 'short_sd': 8, 'long_ma': 72, 'long_sk': 43, 'long_sks': 6, 'long_sd': 12, 'long_lev': 2},
-    {'symbol': 'YGGUSDT', 'short_ma': 34, 'short_sk': 148, 'short_sks': 46, 'short_sd': 19, 'long_ma': 37, 'long_sk': 27, 'long_sks': 80, 'long_sd': 45, 'long_lev': 3},
-    {'symbol': 'CYBERUSDT', 'short_ma': 338, 'short_sk': 135, 'short_sks': 75, 'short_sd': 35, 'long_ma': 299, 'long_sk': 20, 'long_sks': 35, 'long_sd': 4, 'long_lev': 4},
-    {'symbol': 'AXSUSDT', 'short_ma': 198, 'short_sk': 90, 'short_sks': 63, 'short_sd': 12, 'long_ma': 267, 'long_sk': 25, 'long_sks': 20, 'long_sd': 14, 'long_lev': 2},
-    {'symbol': 'SOLVUSDT', 'short_ma': 242, 'short_sk': 150, 'short_sks': 64, 'short_sd': 21, 'long_ma': 162, 'long_sk': 87, 'long_sks': 47, 'long_sd': 6, 'long_lev': 5},
-    {'symbol': 'ARKUSDT', 'short_ma': 341, 'short_sk': 149, 'short_sks': 74, 'short_sd': 44, 'long_ma': 105, 'long_sk': 43, 'long_sks': 15, 'long_sd': 30, 'long_lev': 4},
-    {'symbol': 'TRBUSDT', 'short_ma': 160, 'short_sk': 102, 'short_sks': 53, 'short_sd': 12, 'long_ma': 20, 'long_sk': 109, 'long_sks': 61, 'long_sd': 20, 'long_lev': 2},
-    {'symbol': 'COWUSDT', 'short_ma': 296, 'short_sk': 79, 'short_sks': 31, 'short_sd': 5, 'long_ma': 193, 'long_sk': 50, 'long_sks': 13, 'long_sd': 20, 'long_lev': 5},
-    {'symbol': 'DRIFTUSDT', 'short_ma': 326, 'short_sk': 150, 'short_sks': 75, 'short_sd': 47, 'long_ma': 23, 'long_sk': 18, 'long_sks': 78, 'long_sd': 36, 'long_lev': 3},
-    {'symbol': 'PIXELUSDT', 'short_ma': 101, 'short_sk': 88, 'short_sks': 74, 'short_sd': 29, 'long_ma': 211, 'long_sk': 92, 'long_sks': 68, 'long_sd': 28, 'long_lev': 4},
-    {'symbol': 'VINEUSDT', 'short_ma': 227, 'short_sk': 88, 'short_sks': 76, 'short_sd': 50, 'long_ma': 186, 'long_sk': 57, 'long_sks': 55, 'long_sd': 36, 'long_lev': 3},
-    {'symbol': 'MEUSDT', 'short_ma': 140, 'short_sk': 27, 'short_sks': 17, 'short_sd': 10, 'long_ma': 183, 'long_sk': 62, 'long_sks': 76, 'long_sd': 48, 'long_lev': 5},
-    {'symbol': 'STEEMUSDT', 'short_ma': 49, 'short_sk': 115, 'short_sks': 53, 'short_sd': 36, 'long_ma': 47, 'long_sk': 76, 'long_sks': 26, 'long_sd': 18, 'long_lev': 4},
-    {'symbol': 'PHAUSDT', 'short_ma': 205, 'short_sk': 148, 'short_sks': 80, 'short_sd': 45, 'long_ma': 44, 'long_sk': 144, 'long_sks': 80, 'long_sd': 27, 'long_lev': 5},
-    {'symbol': 'ZECUSDT', 'short_ma': 153, 'short_sk': 81, 'short_sks': 39, 'short_sd': 11, 'long_ma': 258, 'long_sk': 106, 'long_sks': 50, 'long_sd': 8, 'long_lev': 2},
-    {'symbol': 'BLURUSDT', 'short_ma': 126, 'short_sk': 113, 'short_sks': 52, 'short_sd': 25, 'long_ma': 30, 'long_sk': 83, 'long_sks': 80, 'long_sd': 28, 'long_lev': 2},
-    {'symbol': 'SANDUSDT', 'short_ma': 125, 'short_sk': 140, 'short_sks': 72, 'short_sd': 45, 'long_ma': 211, 'long_sk': 132, 'long_sks': 28, 'long_sd': 9, 'long_lev': 3},
-    {'symbol': 'TIAUSDT', 'short_ma': 279, 'short_sk': 95, 'short_sks': 36, 'short_sd': 7, 'long_ma': 20, 'long_sk': 149, 'long_sks': 80, 'long_sd': 26, 'long_lev': 3},
-    {'symbol': 'RUNEUSDT', 'short_ma': 254, 'short_sk': 40, 'short_sks': 30, 'short_sd': 45, 'long_ma': 155, 'long_sk': 31, 'long_sks': 44, 'long_sd': 12, 'long_lev': 2},
-    {'symbol': 'LDOUSDT', 'short_ma': 54, 'short_sk': 134, 'short_sks': 80, 'short_sd': 7, 'long_ma': 22, 'long_sk': 146, 'long_sks': 46, 'long_sd': 16, 'long_lev': 3},
-    {'symbol': 'IMXUSDT', 'short_ma': 103, 'short_sk': 138, 'short_sks': 52, 'short_sd': 32, 'long_ma': 66, 'long_sk': 18, 'long_sks': 71, 'long_sd': 38, 'long_lev': 2},
-    {'symbol': 'APEUSDT', 'short_ma': 145, 'short_sk': 129, 'short_sks': 79, 'short_sd': 18, 'long_ma': 220, 'long_sk': 105, 'long_sks': 47, 'long_sd': 22, 'long_lev': 4},
-    {'symbol': 'IOSTUSDT', 'short_ma': 344, 'short_sk': 90, 'short_sks': 79, 'short_sd': 50, 'long_ma': 159, 'long_sk': 116, 'long_sks': 6, 'long_sd': 38, 'long_lev': 3},
-    {'symbol': 'KOMAUSDT', 'short_ma': 232, 'short_sk': 150, 'short_sks': 71, 'short_sd': 50, 'long_ma': 87, 'long_sk': 85, 'long_sks': 62, 'long_sd': 41, 'long_lev': 1},
-    {'symbol': 'FIDAUSDT', 'short_ma': 125, 'short_sk': 99, 'short_sks': 60, 'short_sd': 26, 'long_ma': 258, 'long_sk': 37, 'long_sks': 8, 'long_sd': 13, 'long_lev': 3},
+    {'symbol': 'BTCUSDT', 'short_ma': 259, 'short_sk': 47, 'short_sks': 26, 'short_sd': 10, 'long_ma': 344, 'long_sk': 34, 'long_sks': 29, 'long_sd': 15, 'long_lev': 5},
+    {'symbol': 'ETHUSDT', 'short_ma': 226, 'short_sk': 148, 'short_sks': 45, 'short_sd': 29, 'long_ma': 151, 'long_sk': 48, 'long_sks': 29, 'long_sd': 11, 'long_lev': 5},
+    {'symbol': 'XRPUSDT', 'short_ma': 199, 'short_sk': 115, 'short_sks': 16, 'short_sd': 46, 'long_ma': 112, 'long_sk': 17, 'long_sks': 12, 'long_sd': 13, 'long_lev': 4},
+    {'symbol': 'SOLUSDT', 'short_ma': 243, 'short_sk': 39, 'short_sks': 28, 'short_sd': 50, 'long_ma': 75, 'long_sk': 39, 'long_sks': 25, 'long_sd': 12, 'long_lev': 3},
+    {'symbol': 'DOGEUSDT', 'short_ma': 101, 'short_sk': 81, 'short_sks': 28, 'short_sd': 16, 'long_ma': 252, 'long_sk': 17, 'long_sks': 43, 'long_sd': 27, 'long_lev': 2},
+    {'symbol': 'ADAUSDT', 'short_ma': 246, 'short_sk': 21, 'short_sks': 25, 'short_sd': 34, 'long_ma': 93, 'long_sk': 28, 'long_sks': 43, 'long_sd': 12, 'long_lev': 3},
+    {'symbol': 'SUSDT', 'short_ma': 32, 'short_sk': 78, 'short_sks': 65, 'short_sd': 42, 'long_ma': 20, 'long_sk': 147, 'long_sks': 78, 'long_sd': 43, 'long_lev': 3},
+    {'symbol': 'SOLVUSDT', 'short_ma': 214, 'short_sk': 126, 'short_sks': 27, 'short_sd': 23, 'long_ma': 174, 'long_sk': 141, 'long_sks': 77, 'long_sd': 36, 'long_lev': 4},
+    {'symbol': 'RAYSOLUSDT', 'short_ma': 167, 'short_sk': 114, 'short_sks': 21, 'short_sd': 20, 'long_ma': 250, 'long_sk': 87, 'long_sks': 61, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'BERAUSDT', 'short_ma': 192, 'short_sk': 140, 'short_sks': 45, 'short_sd': 46, 'long_ma': 34, 'long_sk': 44, 'long_sks': 39, 'long_sd': 10, 'long_lev': 5},
+    {'symbol': 'DUSDT', 'short_ma': 324, 'short_sk': 135, 'short_sks': 40, 'short_sd': 3, 'long_ma': 42, 'long_sk': 141, 'long_sks': 60, 'long_sd': 39, 'long_lev': 5},
+    {'symbol': 'CGPTUSDT', 'short_ma': 75, 'short_sk': 67, 'short_sks': 68, 'short_sd': 5, 'long_ma': 138, 'long_sk': 92, 'long_sks': 64, 'long_sd': 46, 'long_lev': 5},
+    {'symbol': '1000000MOGUSDT', 'short_ma': 146, 'short_sk': 99, 'short_sks': 78, 'short_sd': 44, 'long_ma': 163, 'long_sk': 129, 'long_sks': 16, 'long_sd': 7, 'long_lev': 5},
+    {'symbol': 'VELODROMEUSDT', 'short_ma': 340, 'short_sk': 143, 'short_sks': 66, 'short_sd': 9, 'long_ma': 238, 'long_sk': 150, 'long_sks': 80, 'long_sd': 49, 'long_lev': 4},
+    {'symbol': 'PENGUUSDT', 'short_ma': 101, 'short_sk': 95, 'short_sks': 71, 'short_sd': 16, 'long_ma': 40, 'long_sk': 136, 'long_sks': 24, 'long_sd': 33, 'long_lev': 5},
+    {'symbol': 'AIXBTUSDT', 'short_ma': 129, 'short_sk': 150, 'short_sks': 10, 'short_sd': 16, 'long_ma': 77, 'long_sk': 131, 'long_sks': 72, 'long_sd': 46, 'long_lev': 5},
+    {'symbol': 'MEUSDT', 'short_ma': 205, 'short_sk': 17, 'short_sks': 5, 'short_sd': 47, 'long_ma': 172, 'long_sk': 68, 'long_sks': 71, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'SONICUSDT', 'short_ma': 349, 'short_sk': 28, 'short_sks': 7, 'short_sd': 15, 'long_ma': 121, 'long_sk': 140, 'long_sks': 79, 'long_sd': 50, 'long_lev': 4},
+    {'symbol': 'AEROUSDT', 'short_ma': 327, 'short_sk': 114, 'short_sks': 25, 'short_sd': 49, 'long_ma': 83, 'long_sk': 101, 'long_sks': 67, 'long_sd': 24, 'long_lev': 5},
+    {'symbol': 'FARTCOINUSDT', 'short_ma': 227, 'short_sk': 91, 'short_sks': 80, 'short_sd': 6, 'long_ma': 123, 'long_sk': 80, 'long_sks': 80, 'long_sd': 43, 'long_lev': 5},
+    {'symbol': 'CETUSUSDT', 'short_ma': 198, 'short_sk': 129, 'short_sks': 29, 'short_sd': 9, 'long_ma': 144, 'long_sk': 14, 'long_sks': 11, 'long_sd': 25, 'long_lev': 5},
+    {'symbol': 'VTHOUSDT', 'short_ma': 322, 'short_sk': 35, 'short_sks': 13, 'short_sd': 25, 'long_ma': 307, 'long_sk': 123, 'long_sks': 56, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'PNUTUSDT', 'short_ma': 166, 'short_sk': 125, 'short_sks': 73, 'short_sd': 4, 'long_ma': 73, 'long_sk': 127, 'long_sks': 66, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'VINEUSDT', 'short_ma': 338, 'short_sk': 107, 'short_sks': 55, 'short_sd': 14, 'long_ma': 190, 'long_sk': 35, 'long_sks': 9, 'long_sd': 17, 'long_lev': 4},
+    {'symbol': 'MOVEUSDT', 'short_ma': 271, 'short_sk': 36, 'short_sks': 15, 'short_sd': 12, 'long_ma': 180, 'long_sk': 147, 'long_sks': 57, 'long_sd': 48, 'long_lev': 1},
+    {'symbol': 'MEWUSDT', 'short_ma': 108, 'short_sk': 130, 'short_sks': 59, 'short_sd': 34, 'long_ma': 48, 'long_sk': 33, 'long_sks': 14, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'PHAUSDT', 'short_ma': 121, 'short_sk': 110, 'short_sks': 42, 'short_sd': 3, 'long_ma': 289, 'long_sk': 145, 'long_sks': 76, 'long_sd': 47, 'long_lev': 5},
+    {'symbol': 'VIRTUALUSDT', 'short_ma': 334, 'short_sk': 76, 'short_sks': 11, 'short_sd': 47, 'long_ma': 115, 'long_sk': 23, 'long_sks': 16, 'long_sd': 32, 'long_lev': 5},
+    {'symbol': 'TRUMPUSDT', 'short_ma': 348, 'short_sk': 22, 'short_sks': 68, 'short_sd': 22, 'long_ma': 87, 'long_sk': 144, 'long_sks': 66, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': '1000CATUSDT', 'short_ma': 174, 'short_sk': 25, 'short_sks': 44, 'short_sd': 9, 'long_ma': 32, 'long_sk': 72, 'long_sks': 80, 'long_sd': 8, 'long_lev': 4},
+    {'symbol': 'ZKUSDT', 'short_ma': 83, 'short_sk': 79, 'short_sks': 80, 'short_sd': 25, 'long_ma': 58, 'long_sk': 85, 'long_sks': 15, 'long_sd': 41, 'long_lev': 5},
+    {'symbol': 'DEXEUSDT', 'short_ma': 87, 'short_sk': 148, 'short_sks': 74, 'short_sd': 48, 'long_ma': 25, 'long_sk': 65, 'long_sks': 72, 'long_sd': 21, 'long_lev': 5},
+    {'symbol': 'GOATUSDT', 'short_ma': 184, 'short_sk': 54, 'short_sks': 14, 'short_sd': 48, 'long_ma': 275, 'long_sk': 83, 'long_sks': 73, 'long_sd': 41, 'long_lev': 5},
+    {'symbol': 'EIGENUSDT', 'short_ma': 97, 'short_sk': 143, 'short_sks': 80, 'short_sd': 3, 'long_ma': 216, 'long_sk': 67, 'long_sks': 63, 'long_sd': 31, 'long_lev': 5},
+    {'symbol': 'VANRYUSDT', 'short_ma': 100, 'short_sk': 145, 'short_sks': 60, 'short_sd': 49, 'long_ma': 34, 'long_sk': 20, 'long_sks': 33, 'long_sd': 6, 'long_lev': 5},
+    {'symbol': 'COOKIEUSDT', 'short_ma': 350, 'short_sk': 114, 'short_sks': 62, 'short_sd': 22, 'long_ma': 293, 'long_sk': 150, 'long_sks': 80, 'long_sd': 45, 'long_lev': 3},
+    {'symbol': 'BOMEUSDT', 'short_ma': 123, 'short_sk': 136, 'short_sks': 48, 'short_sd': 15, 'long_ma': 58, 'long_sk': 110, 'long_sks': 60, 'long_sd': 25, 'long_lev': 3},
+    {'symbol': 'SWARMSUSDT', 'short_ma': 310, 'short_sk': 150, 'short_sks': 74, 'short_sd': 23, 'long_ma': 309, 'long_sk': 34, 'long_sks': 35, 'long_sd': 45, 'long_lev': 2},
+    {'symbol': 'SYNUSDT', 'short_ma': 132, 'short_sk': 106, 'short_sks': 18, 'short_sd': 37, 'long_ma': 31, 'long_sk': 43, 'long_sks': 15, 'long_sd': 30, 'long_lev': 5},
+    {'symbol': 'DEGENUSDT', 'short_ma': 65, 'short_sk': 22, 'short_sks': 6, 'short_sd': 5, 'long_ma': 78, 'long_sk': 57, 'long_sks': 70, 'long_sd': 27, 'long_lev': 4},
+    {'symbol': 'HIVEUSDT', 'short_ma': 220, 'short_sk': 148, 'short_sks': 80, 'short_sd': 5, 'long_ma': 114, 'long_sk': 150, 'long_sks': 73, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'BIOUSDT', 'short_ma': 85, 'short_sk': 29, 'short_sks': 20, 'short_sd': 7, 'long_ma': 23, 'long_sk': 147, 'long_sks': 39, 'long_sd': 32, 'long_lev': 5},
+    {'symbol': '1MBABYDOGEUSDT', 'short_ma': 94, 'short_sk': 119, 'short_sks': 30, 'short_sd': 8, 'long_ma': 133, 'long_sk': 68, 'long_sks': 70, 'long_sd': 31, 'long_lev': 5},
+    {'symbol': 'ACXUSDT', 'short_ma': 137, 'short_sk': 140, 'short_sks': 35, 'short_sd': 28, 'long_ma': 45, 'long_sk': 16, 'long_sks': 11, 'long_sd': 3, 'long_lev': 5},
+    {'symbol': 'SYSUSDT', 'short_ma': 267, 'short_sk': 97, 'short_sks': 11, 'short_sd': 12, 'long_ma': 47, 'long_sk': 80, 'long_sks': 79, 'long_sd': 36, 'long_lev': 5},
+    {'symbol': 'VVVUSDT', 'short_ma': 216, 'short_sk': 23, 'short_sks': 15, 'short_sd': 16, 'long_ma': 39, 'long_sk': 148, 'long_sks': 79, 'long_sd': 46, 'long_lev': 5},
+    {'symbol': 'HMSTRUSDT', 'short_ma': 143, 'short_sk': 32, 'short_sks': 32, 'short_sd': 4, 'long_ma': 171, 'long_sk': 143, 'long_sks': 57, 'long_sd': 41, 'long_lev': 5},
+    {'symbol': 'NOTUSDT', 'short_ma': 40, 'short_sk': 142, 'short_sks': 65, 'short_sd': 40, 'long_ma': 229, 'long_sk': 75, 'long_sks': 78, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'GRIFFAINUSDT', 'short_ma': 41, 'short_sk': 45, 'short_sks': 29, 'short_sd': 6, 'long_ma': 145, 'long_sk': 150, 'long_sks': 57, 'long_sd': 41, 'long_lev': 5},
+    {'symbol': 'KOMAUSDT', 'short_ma': 315, 'short_sk': 141, 'short_sks': 76, 'short_sd': 49, 'long_ma': 24, 'long_sk': 44, 'long_sks': 56, 'long_sd': 47, 'long_lev': 5},
+    {'symbol': 'AVAAIUSDT', 'short_ma': 166, 'short_sk': 94, 'short_sks': 68, 'short_sd': 49, 'long_ma': 289, 'long_sk': 85, 'long_sks': 14, 'long_sd': 19, 'long_lev': 1},
+    {'symbol': 'VANAUSDT', 'short_ma': 257, 'short_sk': 137, 'short_sks': 72, 'short_sd': 33, 'long_ma': 253, 'long_sk': 23, 'long_sks': 60, 'long_sd': 25, 'long_lev': 1},
+    {'symbol': 'SAGAUSDT', 'short_ma': 232, 'short_sk': 150, 'short_sks': 69, 'short_sd': 27, 'long_ma': 39, 'long_sk': 29, 'long_sks': 76, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'PIXELUSDT', 'short_ma': 77, 'short_sk': 149, 'short_sks': 37, 'short_sd': 50, 'long_ma': 57, 'long_sk': 79, 'long_sks': 78, 'long_sd': 29, 'long_lev': 4},
+    {'symbol': 'PROMUSDT', 'short_ma': 20, 'short_sk': 41, 'short_sks': 61, 'short_sd': 49, 'long_ma': 263, 'long_sk': 78, 'long_sks': 32, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'DRIFTUSDT', 'short_ma': 350, 'short_sk': 150, 'short_sks': 11, 'short_sd': 31, 'long_ma': 20, 'long_sk': 149, 'long_sks': 57, 'long_sd': 11, 'long_lev': 5},
+    {'symbol': 'BRETTUSDT', 'short_ma': 250, 'short_sk': 15, 'short_sks': 43, 'short_sd': 45, 'long_ma': 49, 'long_sk': 14, 'long_sks': 15, 'long_sd': 22, 'long_lev': 5},
+    {'symbol': 'POLUSDT', 'short_ma': 73, 'short_sk': 49, 'short_sks': 7, 'short_sd': 10, 'long_ma': 273, 'long_sk': 36, 'long_sks': 7, 'long_sd': 23, 'long_lev': 5},
+    {'symbol': 'AKTUSDT', 'short_ma': 202, 'short_sk': 150, 'short_sks': 17, 'short_sd': 32, 'long_ma': 55, 'long_sk': 27, 'long_sks': 28, 'long_sd': 37, 'long_lev': 5},
+    {'symbol': 'SCRUSDT', 'short_ma': 167, 'short_sk': 132, 'short_sks': 9, 'short_sd': 17, 'long_ma': 97, 'long_sk': 150, 'long_sks': 15, 'long_sd': 13, 'long_lev': 5},
+    {'symbol': 'KAIAUSDT', 'short_ma': 23, 'short_sk': 149, 'short_sks': 80, 'short_sd': 46, 'long_ma': 114, 'long_sk': 146, 'long_sks': 80, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'SPXUSDT', 'short_ma': 62, 'short_sk': 128, 'short_sks': 60, 'short_sd': 31, 'long_ma': 76, 'long_sk': 59, 'long_sks': 59, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'FIDAUSDT', 'short_ma': 138, 'short_sk': 54, 'short_sks': 34, 'short_sd': 42, 'long_ma': 246, 'long_sk': 24, 'long_sks': 34, 'long_sd': 36, 'long_lev': 5},
+    {'symbol': 'RPLUSDT', 'short_ma': 115, 'short_sk': 88, 'short_sks': 19, 'short_sd': 26, 'long_ma': 26, 'long_sk': 16, 'long_sks': 45, 'long_sd': 50, 'long_lev': 2},
+    {'symbol': 'ANIMEUSDT', 'short_ma': 90, 'short_sk': 149, 'short_sks': 80, 'short_sd': 32, 'long_ma': 309, 'long_sk': 17, 'long_sks': 25, 'long_sd': 30, 'long_lev': 5},
+    {'symbol': 'TURBOUSDT', 'short_ma': 335, 'short_sk': 140, 'short_sks': 27, 'short_sd': 23, 'long_ma': 84, 'long_sk': 60, 'long_sks': 79, 'long_sd': 36, 'long_lev': 5},
+    {'symbol': 'KMNOUSDT', 'short_ma': 61, 'short_sk': 150, 'short_sks': 65, 'short_sd': 48, 'long_ma': 42, 'long_sk': 38, 'long_sks': 31, 'long_sd': 48, 'long_lev': 5},
+    {'symbol': 'ENAUSDT', 'short_ma': 222, 'short_sk': 67, 'short_sks': 24, 'short_sd': 48, 'long_ma': 280, 'long_sk': 126, 'long_sks': 31, 'long_sd': 37, 'long_lev': 5},
+    {'symbol': 'PIPPINUSDT', 'short_ma': 20, 'short_sk': 134, 'short_sks': 80, 'short_sd': 46, 'long_ma': 115, 'long_sk': 91, 'long_sks': 31, 'long_sd': 9, 'long_lev': 2},
+    {'symbol': 'POPCATUSDT', 'short_ma': 178, 'short_sk': 87, 'short_sks': 31, 'short_sd': 43, 'long_ma': 212, 'long_sk': 150, 'long_sks': 72, 'long_sd': 17, 'long_lev': 5},
+    {'symbol': 'ACTUSDT', 'short_ma': 167, 'short_sk': 44, 'short_sks': 37, 'short_sd': 22, 'long_ma': 42, 'long_sk': 92, 'long_sks': 31, 'long_sd': 9, 'long_lev': 5},
+    {'symbol': 'NFPUSDT', 'short_ma': 132, 'short_sk': 134, 'short_sks': 70, 'short_sd': 41, 'long_ma': 64, 'long_sk': 14, 'long_sks': 31, 'long_sd': 19, 'long_lev': 5},
+    {'symbol': 'ZETAUSDT', 'short_ma': 161, 'short_sk': 23, 'short_sks': 78, 'short_sd': 25, 'long_ma': 35, 'long_sk': 17, 'long_sks': 48, 'long_sd': 13, 'long_lev': 2},
+    {'symbol': 'MOCAUSDT', 'short_ma': 348, 'short_sk': 15, 'short_sks': 29, 'short_sd': 17, 'long_ma': 349, 'long_sk': 140, 'long_sks': 73, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'AEVOUSDT', 'short_ma': 178, 'short_sk': 94, 'short_sks': 7, 'short_sd': 22, 'long_ma': 64, 'long_sk': 59, 'long_sks': 79, 'long_sd': 38, 'long_lev': 4},
+    {'symbol': 'USUALUSDT', 'short_ma': 245, 'short_sk': 109, 'short_sks': 80, 'short_sd': 6, 'long_ma': 247, 'long_sk': 42, 'long_sks': 6, 'long_sd': 7, 'long_lev': 1},
+    {'symbol': 'IOUSDT', 'short_ma': 158, 'short_sk': 15, 'short_sks': 80, 'short_sd': 34, 'long_ma': 227, 'long_sk': 138, 'long_sks': 64, 'long_sd': 33, 'long_lev': 5},
+    {'symbol': 'GRASSUSDT', 'short_ma': 276, 'short_sk': 19, 'short_sks': 17, 'short_sd': 26, 'long_ma': 78, 'long_sk': 59, 'long_sks': 30, 'long_sd': 36, 'long_lev': 3},
+    {'symbol': 'RAREUSDT', 'short_ma': 223, 'short_sk': 104, 'short_sks': 80, 'short_sd': 39, 'long_ma': 35, 'long_sk': 40, 'long_sks': 23, 'long_sd': 34, 'long_lev': 5},
+    {'symbol': 'HIPPOUSDT', 'short_ma': 86, 'short_sk': 144, 'short_sks': 74, 'short_sd': 50, 'long_ma': 82, 'long_sk': 96, 'long_sks': 50, 'long_sd': 42, 'long_lev': 5},
+    {'symbol': 'ALTUSDT', 'short_ma': 164, 'short_sk': 86, 'short_sks': 56, 'short_sd': 40, 'long_ma': 24, 'long_sk': 141, 'long_sks': 63, 'long_sd': 22, 'long_lev': 2},
+    {'symbol': 'PORTALUSDT', 'short_ma': 266, 'short_sk': 147, 'short_sks': 26, 'short_sd': 19, 'long_ma': 69, 'long_sk': 140, 'long_sks': 15, 'long_sd': 20, 'long_lev': 2},
+    {'symbol': 'ORCAUSDT', 'short_ma': 133, 'short_sk': 63, 'short_sks': 60, 'short_sd': 3, 'long_ma': 20, 'long_sk': 146, 'long_sks': 31, 'long_sd': 10, 'long_lev': 3},
+    {'symbol': 'MBOXUSDT', 'short_ma': 317, 'short_sk': 101, 'short_sks': 56, 'short_sd': 37, 'long_ma': 60, 'long_sk': 112, 'long_sks': 29, 'long_sd': 19, 'long_lev': 5},
+    {'symbol': 'BANANAUSDT', 'short_ma': 308, 'short_sk': 142, 'short_sks': 21, 'short_sd': 21, 'long_ma': 46, 'long_sk': 135, 'long_sks': 78, 'long_sd': 4, 'long_lev': 5},
+    {'symbol': 'RONINUSDT', 'short_ma': 67, 'short_sk': 150, 'short_sks': 59, 'short_sd': 39, 'long_ma': 241, 'long_sk': 14, 'long_sks': 18, 'long_sd': 13, 'long_lev': 2},
+    {'symbol': 'RENDERUSDT', 'short_ma': 211, 'short_sk': 48, 'short_sks': 31, 'short_sd': 4, 'long_ma': 198, 'long_sk': 69, 'long_sks': 14, 'long_sd': 3, 'long_lev': 5},
+    {'symbol': 'NTRNUSDT', 'short_ma': 96, 'short_sk': 132, 'short_sks': 42, 'short_sd': 30, 'long_ma': 61, 'long_sk': 64, 'long_sks': 79, 'long_sd': 25, 'long_lev': 4},
+    {'symbol': 'AIUSDT', 'short_ma': 115, 'short_sk': 63, 'short_sks': 58, 'short_sd': 17, 'long_ma': 39, 'long_sk': 77, 'long_sks': 48, 'long_sd': 34, 'long_lev': 4},
+    {'symbol': 'WUSDT', 'short_ma': 115, 'short_sk': 139, 'short_sks': 68, 'short_sd': 11, 'long_ma': 250, 'long_sk': 36, 'long_sks': 18, 'long_sd': 8, 'long_lev': 5},
+    {'symbol': 'DYMUSDT', 'short_ma': 90, 'short_sk': 119, 'short_sks': 80, 'short_sd': 48, 'long_ma': 47, 'long_sk': 36, 'long_sks': 18, 'long_sd': 47, 'long_lev': 5},
+    {'symbol': '1000WHYUSDT', 'short_ma': 297, 'short_sk': 90, 'short_sks': 23, 'short_sd': 22, 'long_ma': 39, 'long_sk': 126, 'long_sks': 62, 'long_sd': 7, 'long_lev': 1},
+    {'symbol': 'BLURUSDT', 'short_ma': 229, 'short_sk': 143, 'short_sks': 59, 'short_sd': 27, 'long_ma': 152, 'long_sk': 150, 'long_sks': 70, 'long_sd': 38, 'long_lev': 3},
+    {'symbol': 'LSKUSDT', 'short_ma': 81, 'short_sk': 106, 'short_sks': 66, 'short_sd': 48, 'long_ma': 58, 'long_sk': 85, 'long_sks': 18, 'long_sd': 28, 'long_lev': 2},
+    {'symbol': 'CHILLGUYUSDT', 'short_ma': 97, 'short_sk': 121, 'short_sks': 6, 'short_sd': 4, 'long_ma': 91, 'long_sk': 16, 'long_sks': 21, 'long_sd': 5, 'long_lev': 5},
+    {'symbol': 'BBUSDT', 'short_ma': 111, 'short_sk': 150, 'short_sks': 27, 'short_sd': 49, 'long_ma': 184, 'long_sk': 131, 'long_sks': 63, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'GUSDT', 'short_ma': 114, 'short_sk': 140, 'short_sks': 50, 'short_sd': 8, 'long_ma': 23, 'long_sk': 27, 'long_sks': 78, 'long_sd': 20, 'long_lev': 4},
+    {'symbol': 'WIFUSDT', 'short_ma': 20, 'short_sk': 87, 'short_sks': 68, 'short_sd': 10, 'long_ma': 319, 'long_sk': 93, 'long_sks': 62, 'long_sd': 31, 'long_lev': 5},
+    {'symbol': '1000CHEEMSUSDT', 'short_ma': 25, 'short_sk': 17, 'short_sks': 79, 'short_sd': 13, 'long_ma': 111, 'long_sk': 111, 'long_sks': 54, 'long_sd': 40, 'long_lev': 5},
+    {'symbol': 'FLUXUSDT', 'short_ma': 57, 'short_sk': 73, 'short_sks': 77, 'short_sd': 3, 'long_ma': 38, 'long_sk': 29, 'long_sks': 13, 'long_sd': 36, 'long_lev': 5},
+    {'symbol': 'DIAUSDT', 'short_ma': 92, 'short_sk': 131, 'short_sks': 58, 'short_sd': 43, 'long_ma': 57, 'long_sk': 53, 'long_sks': 25, 'long_sd': 17, 'long_lev': 5},
+    {'symbol': 'METISUSDT', 'short_ma': 174, 'short_sk': 149, 'short_sks': 13, 'short_sd': 39, 'long_ma': 102, 'long_sk': 109, 'long_sks': 77, 'long_sd': 33, 'long_lev': 5},
+    {'symbol': 'BICOUSDT', 'short_ma': 244, 'short_sk': 113, 'short_sks': 42, 'short_sd': 6, 'long_ma': 73, 'long_sk': 78, 'long_sks': 25, 'long_sd': 4, 'long_lev': 2},
+    {'symbol': 'STRKUSDT', 'short_ma': 96, 'short_sk': 126, 'short_sks': 56, 'short_sd': 35, 'long_ma': 240, 'long_sk': 40, 'long_sks': 6, 'long_sd': 5, 'long_lev': 5},
+    {'symbol': 'PYTHUSDT', 'short_ma': 205, 'short_sk': 33, 'short_sks': 67, 'short_sd': 33, 'long_ma': 26, 'long_sk': 99, 'long_sks': 10, 'long_sd': 18, 'long_lev': 2},
+    {'symbol': 'COSUSDT', 'short_ma': 206, 'short_sk': 98, 'short_sks': 70, 'short_sd': 12, 'long_ma': 130, 'long_sk': 14, 'long_sks': 40, 'long_sd': 28, 'long_lev': 1},
+    {'symbol': 'ETHWUSDT', 'short_ma': 191, 'short_sk': 141, 'short_sks': 57, 'short_sd': 45, 'long_ma': 239, 'long_sk': 43, 'long_sks': 12, 'long_sd': 15, 'long_lev': 5},
+    {'symbol': 'TNSRUSDT', 'short_ma': 227, 'short_sk': 42, 'short_sks': 78, 'short_sd': 29, 'long_ma': 70, 'long_sk': 110, 'long_sks': 39, 'long_sd': 32, 'long_lev': 4},
+    {'symbol': 'MEMEUSDT', 'short_ma': 248, 'short_sk': 66, 'short_sks': 8, 'short_sd': 46, 'long_ma': 33, 'long_sk': 76, 'long_sks': 56, 'long_sd': 40, 'long_lev': 1},
+    {'symbol': 'LUMIAUSDT', 'short_ma': 297, 'short_sk': 146, 'short_sks': 8, 'short_sd': 43, 'long_ma': 55, 'long_sk': 53, 'long_sks': 17, 'long_sd': 24, 'long_lev': 5},
+    {'symbol': 'SEIUSDT', 'short_ma': 192, 'short_sk': 121, 'short_sks': 67, 'short_sd': 39, 'long_ma': 42, 'long_sk': 44, 'long_sks': 79, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'REZUSDT', 'short_ma': 223, 'short_sk': 16, 'short_sks': 13, 'short_sd': 34, 'long_ma': 219, 'long_sk': 147, 'long_sks': 65, 'long_sd': 41, 'long_lev': 1},
+    {'symbol': 'CATIUSDT', 'short_ma': 318, 'short_sk': 44, 'short_sks': 18, 'short_sd': 6, 'long_ma': 21, 'long_sk': 19, 'long_sks': 10, 'long_sd': 23, 'long_lev': 1},
+    {'symbol': 'MOVRUSDT', 'short_ma': 218, 'short_sk': 125, 'short_sks': 47, 'short_sd': 47, 'long_ma': 64, 'long_sk': 134, 'long_sks': 38, 'long_sd': 3, 'long_lev': 4},
+    {'symbol': 'BIGTIMEUSDT', 'short_ma': 187, 'short_sk': 82, 'short_sks': 58, 'short_sd': 7, 'long_ma': 50, 'long_sk': 124, 'long_sks': 77, 'long_sd': 42, 'long_lev': 4},
+    {'symbol': 'AVAUSDT', 'short_ma': 338, 'short_sk': 15, 'short_sks': 45, 'short_sd': 23, 'long_ma': 34, 'long_sk': 148, 'long_sks': 33, 'long_sd': 12, 'long_lev': 4},
+    {'symbol': 'MELANIAUSDT', 'short_ma': 151, 'short_sk': 50, 'short_sks': 19, 'short_sd': 43, 'long_ma': 40, 'long_sk': 150, 'long_sks': 68, 'long_sd': 28, 'long_lev': 5},
+    {'symbol': 'MOODENGUSDT', 'short_ma': 241, 'short_sk': 31, 'short_sks': 6, 'short_sd': 10, 'long_ma': 122, 'long_sk': 80, 'long_sks': 71, 'long_sd': 26, 'long_lev': 5},
+    {'symbol': 'NEIROUSDT', 'short_ma': 120, 'short_sk': 92, 'short_sks': 56, 'short_sd': 9, 'long_ma': 127, 'long_sk': 135, 'long_sks': 33, 'long_sd': 14, 'long_lev': 5},
+    {'symbol': 'POLYXUSDT', 'short_ma': 239, 'short_sk': 113, 'short_sks': 73, 'short_sd': 36, 'long_ma': 172, 'long_sk': 41, 'long_sks': 7, 'long_sd': 3, 'long_lev': 5},
+    {'symbol': 'IDUSDT', 'short_ma': 46, 'short_sk': 143, 'short_sks': 75, 'short_sd': 30, 'long_ma': 297, 'long_sk': 139, 'long_sks': 36, 'long_sd': 29, 'long_lev': 3},
+    {'symbol': 'TONUSDT', 'short_ma': 77, 'short_sk': 118, 'short_sks': 79, 'short_sd': 19, 'long_ma': 197, 'long_sk': 21, 'long_sks': 15, 'long_sd': 37, 'long_lev': 4},
+    {'symbol': 'SAFEUSDT', 'short_ma': 139, 'short_sk': 65, 'short_sks': 5, 'short_sd': 7, 'long_ma': 44, 'long_sk': 141, 'long_sks': 39, 'long_sd': 30, 'long_lev': 5},
+    {'symbol': 'WAXPUSDT', 'short_ma': 129, 'short_sk': 136, 'short_sks': 71, 'short_sd': 34, 'long_ma': 65, 'long_sk': 37, 'long_sks': 33, 'long_sd': 16, 'long_lev': 5},
+    {'symbol': 'XAIUSDT', 'short_ma': 165, 'short_sk': 47, 'short_sks': 80, 'short_sd': 10, 'long_ma': 22, 'long_sk': 35, 'long_sks': 68, 'long_sd': 47, 'long_lev': 4},
+    {'symbol': 'ILVUSDT', 'short_ma': 182, 'short_sk': 105, 'short_sks': 80, 'short_sd': 32, 'long_ma': 55, 'long_sk': 136, 'long_sks': 17, 'long_sd': 36, 'long_lev': 5},
+    {'symbol': 'HFTUSDT', 'short_ma': 331, 'short_sk': 134, 'short_sks': 76, 'short_sd': 49, 'long_ma': 22, 'long_sk': 36, 'long_sks': 10, 'long_sd': 22, 'long_lev': 3},
+    {'symbol': '1000FLOKIUSDT', 'short_ma': 128, 'short_sk': 104, 'short_sks': 70, 'short_sd': 49, 'long_ma': 55, 'long_sk': 150, 'long_sks': 9, 'long_sd': 36, 'long_lev': 4},
+    {'symbol': 'STEEMUSDT', 'short_ma': 49, 'short_sk': 135, 'short_sks': 53, 'short_sd': 23, 'long_ma': 49, 'long_sk': 23, 'long_sks': 40, 'long_sd': 22, 'long_lev': 4},
+    {'symbol': 'ACEUSDT', 'short_ma': 285, 'short_sk': 66, 'short_sks': 45, 'short_sd': 10, 'long_ma': 67, 'long_sk': 126, 'long_sks': 80, 'long_sd': 27, 'long_lev': 1},
+    {'symbol': 'ARKMUSDT', 'short_ma': 188, 'short_sk': 72, 'short_sks': 22, 'short_sd': 45, 'long_ma': 200, 'long_sk': 85, 'long_sks': 76, 'long_sd': 15, 'long_lev': 5},
+    {'symbol': 'CAKEUSDT', 'short_ma': 56, 'short_sk': 123, 'short_sks': 7, 'short_sd': 16, 'long_ma': 20, 'long_sk': 127, 'long_sks': 60, 'long_sd': 32, 'long_lev': 5},
+    {'symbol': 'ETHFIUSDT', 'short_ma': 219, 'short_sk': 74, 'short_sks': 19, 'short_sd': 4, 'long_ma': 25, 'long_sk': 32, 'long_sks': 80, 'long_sd': 24, 'long_lev': 3},
+    {'symbol': 'ARBUSDT', 'short_ma': 124, 'short_sk': 90, 'short_sks': 39, 'short_sd': 3, 'long_ma': 51, 'long_sk': 137, 'long_sks': 47, 'long_sd': 27, 'long_lev': 5},
+    {'symbol': 'BEAMXUSDT', 'short_ma': 103, 'short_sk': 44, 'short_sks': 77, 'short_sd': 29, 'long_ma': 76, 'long_sk': 144, 'long_sks': 59, 'long_sd': 6, 'long_lev': 4},
+    {'symbol': 'THEUSDT', 'short_ma': 201, 'short_sk': 149, 'short_sks': 72, 'short_sd': 5, 'long_ma': 236, 'long_sk': 38, 'long_sks': 65, 'long_sd': 14, 'long_lev': 5},
+    {'symbol': '1000BONKUSDT', 'short_ma': 36, 'short_sk': 20, 'short_sks': 5, 'short_sd': 33, 'long_ma': 274, 'long_sk': 67, 'long_sks': 14, 'long_sd': 5, 'long_lev': 4},
+    {'symbol': 'DOGSUSDT', 'short_ma': 274, 'short_sk': 32, 'short_sks': 62, 'short_sd': 18, 'long_ma': 41, 'long_sk': 91, 'long_sks': 66, 'long_sd': 39, 'long_lev': 3},
+    {'symbol': 'CYBERUSDT', 'short_ma': 344, 'short_sk': 141, 'short_sks': 56, 'short_sd': 49, 'long_ma': 248, 'long_sk': 41, 'long_sks': 32, 'long_sd': 6, 'long_lev': 2},
+    {'symbol': 'LISTAUSDT', 'short_ma': 122, 'short_sk': 104, 'short_sks': 64, 'short_sd': 31, 'long_ma': 38, 'long_sk': 123, 'long_sks': 59, 'long_sd': 31, 'long_lev': 1},
+    {'symbol': 'BNTUSDT', 'short_ma': 291, 'short_sk': 113, 'short_sks': 79, 'short_sd': 50, 'long_ma': 120, 'long_sk': 16, 'long_sks': 31, 'long_sd': 12, 'long_lev': 5},
+    {'symbol': 'RIFUSDT', 'short_ma': 129, 'short_sk': 148, 'short_sks': 71, 'short_sd': 16, 'long_ma': 101, 'long_sk': 40, 'long_sks': 28, 'long_sd': 13, 'long_lev': 5},
+    {'symbol': 'FLOWUSDT', 'short_ma': 115, 'short_sk': 116, 'short_sks': 52, 'short_sd': 44, 'long_ma': 57, 'long_sk': 106, 'long_sks': 37, 'long_sd': 15, 'long_lev': 3},
+    {'symbol': 'POWRUSDT', 'short_ma': 186, 'short_sk': 145, 'short_sks': 80, 'short_sd': 10, 'long_ma': 40, 'long_sk': 146, 'long_sks': 7, 'long_sd': 50, 'long_lev': 4},
+    {'symbol': 'SUIUSDT', 'short_ma': 338, 'short_sk': 148, 'short_sks': 76, 'short_sd': 50, 'long_ma': 102, 'long_sk': 108, 'long_sks': 38, 'long_sd': 5, 'long_lev': 5},
+    {'symbol': 'ORDIUSDT', 'short_ma': 177, 'short_sk': 68, 'short_sks': 70, 'short_sd': 41, 'long_ma': 30, 'long_sk': 140, 'long_sks': 11, 'long_sd': 49, 'long_lev': 3},
+    {'symbol': 'APEUSDT', 'short_ma': 144, 'short_sk': 135, 'short_sks': 25, 'short_sd': 48, 'long_ma': 207, 'long_sk': 84, 'long_sks': 78, 'long_sd': 29, 'long_lev': 5},
+    {'symbol': 'USTCUSDT', 'short_ma': 310, 'short_sk': 106, 'short_sks': 77, 'short_sd': 47, 'long_ma': 86, 'long_sk': 15, 'long_sks': 46, 'long_sd': 19, 'long_lev': 1},
+    {'symbol': 'COWUSDT', 'short_ma': 204, 'short_sk': 58, 'short_sks': 17, 'short_sd': 26, 'long_ma': 65, 'long_sk': 111, 'long_sks': 79, 'long_sd': 30, 'long_lev': 5},
+    {'symbol': 'MANAUSDT', 'short_ma': 186, 'short_sk': 149, 'short_sks': 78, 'short_sd': 34, 'long_ma': 45, 'long_sk': 133, 'long_sks': 36, 'long_sd': 27, 'long_lev': 3},
+    {'symbol': 'YGGUSDT', 'short_ma': 223, 'short_sk': 145, 'short_sks': 36, 'short_sd': 24, 'long_ma': 22, 'long_sk': 103, 'long_sks': 37, 'long_sd': 9, 'long_lev': 2},
+    {'symbol': 'HIGHUSDT', 'short_ma': 20, 'short_sk': 76, 'short_sks': 58, 'short_sd': 8, 'long_ma': 72, 'long_sk': 82, 'long_sks': 75, 'long_sd': 23, 'long_lev': 5},
+    {'symbol': 'ONDOUSDT', 'short_ma': 331, 'short_sk': 59, 'short_sks': 78, 'short_sd': 9, 'long_ma': 118, 'long_sk': 148, 'long_sks': 73, 'long_sd': 49, 'long_lev': 5},
+    {'symbol': 'SUNUSDT', 'short_ma': 162, 'short_sk': 139, 'short_sks': 71, 'short_sd': 50, 'long_ma': 156, 'long_sk': 138, 'long_sks': 53, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'LUNA2USDT', 'short_ma': 166, 'short_sk': 14, 'short_sks': 47, 'short_sd': 15, 'long_ma': 64, 'long_sk': 127, 'long_sks': 58, 'long_sd': 32, 'long_lev': 4},
+    {'symbol': 'ZROUSDT', 'short_ma': 65, 'short_sk': 73, 'short_sks': 6, 'short_sd': 22, 'long_ma': 20, 'long_sk': 23, 'long_sks': 14, 'long_sd': 14, 'long_lev': 3},
+    {'symbol': 'MAVUSDT', 'short_ma': 243, 'short_sk': 150, 'short_sks': 12, 'short_sd': 19, 'long_ma': 191, 'long_sk': 107, 'long_sks': 60, 'long_sd': 18, 'long_lev': 2},
+    {'symbol': 'MAGICUSDT', 'short_ma': 288, 'short_sk': 148, 'short_sks': 72, 'short_sd': 31, 'long_ma': 85, 'long_sk': 73, 'long_sks': 29, 'long_sd': 20, 'long_lev': 3},
+    {'symbol': 'AXLUSDT', 'short_ma': 346, 'short_sk': 147, 'short_sks': 32, 'short_sd': 24, 'long_ma': 85, 'long_sk': 72, 'long_sks': 80, 'long_sd': 45, 'long_lev': 2},
+    {'symbol': '1000PEPEUSDT', 'short_ma': 48, 'short_sk': 27, 'short_sks': 26, 'short_sd': 25, 'long_ma': 91, 'long_sk': 44, 'long_sks': 19, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'GALAUSDT', 'short_ma': 47, 'short_sk': 55, 'short_sks': 28, 'short_sd': 11, 'long_ma': 306, 'long_sk': 144, 'long_sks': 33, 'long_sd': 21, 'long_lev': 2},
+    {'symbol': 'ONEUSDT', 'short_ma': 123, 'short_sk': 127, 'short_sks': 76, 'short_sd': 25, 'long_ma': 50, 'long_sk': 57, 'long_sks': 9, 'long_sd': 22, 'long_lev': 3},
+    {'symbol': 'JTOUSDT', 'short_ma': 82, 'short_sk': 123, 'short_sks': 79, 'short_sd': 31, 'long_ma': 111, 'long_sk': 119, 'long_sks': 49, 'long_sd': 22, 'long_lev': 4},
+    {'symbol': 'AUCTIONUSDT', 'short_ma': 68, 'short_sk': 18, 'short_sks': 30, 'short_sd': 32, 'long_ma': 20, 'long_sk': 121, 'long_sks': 33, 'long_sd': 45, 'long_lev': 5},
+    {'symbol': 'ALCHUSDT', 'short_ma': 96, 'short_sk': 19, 'short_sks': 26, 'short_sd': 41, 'long_ma': 222, 'long_sk': 149, 'long_sks': 50, 'long_sd': 41, 'long_lev': 5},
+    {'symbol': 'GMTUSDT', 'short_ma': 107, 'short_sk': 133, 'short_sks': 69, 'short_sd': 48, 'long_ma': 95, 'long_sk': 68, 'long_sks': 17, 'long_sd': 7, 'long_lev': 3},
+    {'symbol': 'OGNUSDT', 'short_ma': 267, 'short_sk': 57, 'short_sks': 80, 'short_sd': 50, 'long_ma': 124, 'long_sk': 47, 'long_sks': 32, 'long_sd': 14, 'long_lev': 1},
+    {'symbol': 'WLDUSDT', 'short_ma': 188, 'short_sk': 14, 'short_sks': 59, 'short_sd': 36, 'long_ma': 306, 'long_sk': 28, 'long_sks': 25, 'long_sd': 12, 'long_lev': 5},
+    {'symbol': 'RDNTUSDT', 'short_ma': 271, 'short_sk': 39, 'short_sks': 40, 'short_sd': 11, 'long_ma': 181, 'long_sk': 106, 'long_sks': 78, 'long_sd': 15, 'long_lev': 1},
+    {'symbol': 'TIAUSDT', 'short_ma': 331, 'short_sk': 149, 'short_sks': 37, 'short_sd': 37, 'long_ma': 42, 'long_sk': 97, 'long_sks': 79, 'long_sd': 9, 'long_lev': 1},
+    {'symbol': 'ZEREBROUSDT', 'short_ma': 347, 'short_sk': 131, 'short_sks': 35, 'short_sd': 37, 'long_ma': 61, 'long_sk': 52, 'long_sks': 76, 'long_sd': 35, 'long_lev': 5},
+    {'symbol': 'JOEUSDT', 'short_ma': 245, 'short_sk': 149, 'short_sks': 46, 'short_sd': 23, 'long_ma': 68, 'long_sk': 40, 'long_sks': 20, 'long_sd': 32, 'long_lev': 3},
+    {'symbol': 'SANDUSDT', 'short_ma': 77, 'short_sk': 19, 'short_sks': 5, 'short_sd': 35, 'long_ma': 276, 'long_sk': 136, 'long_sks': 24, 'long_sd': 18, 'long_lev': 4},
+    {'symbol': 'AGLDUSDT', 'short_ma': 116, 'short_sk': 146, 'short_sks': 76, 'short_sd': 49, 'long_ma': 32, 'long_sk': 15, 'long_sks': 18, 'long_sd': 46, 'long_lev': 3},
+    {'symbol': 'KASUSDT', 'short_ma': 81, 'short_sk': 81, 'short_sks': 77, 'short_sd': 30, 'long_ma': 249, 'long_sk': 21, 'long_sks': 35, 'long_sd': 40, 'long_lev': 5},
+    {'symbol': 'OPUSDT', 'short_ma': 345, 'short_sk': 123, 'short_sks': 72, 'short_sd': 48, 'long_ma': 48, 'long_sk': 136, 'long_sks': 31, 'long_sd': 31, 'long_lev': 4},
+    {'symbol': 'MANTAUSDT', 'short_ma': 59, 'short_sk': 21, 'short_sks': 37, 'short_sd': 5, 'long_ma': 66, 'long_sk': 48, 'long_sks': 56, 'long_sd': 45, 'long_lev': 3},
+    {'symbol': 'PENDLEUSDT', 'short_ma': 145, 'short_sk': 90, 'short_sks': 63, 'short_sd': 15, 'long_ma': 337, 'long_sk': 127, 'long_sks': 74, 'long_sd': 42, 'long_lev': 5},
+    {'symbol': 'STXUSDT', 'short_ma': 315, 'short_sk': 110, 'short_sks': 76, 'short_sd': 46, 'long_ma': 275, 'long_sk': 26, 'long_sks': 6, 'long_sd': 6, 'long_lev': 4},
+    {'symbol': 'HBARUSDT', 'short_ma': 128, 'short_sk': 111, 'short_sks': 76, 'short_sd': 40, 'long_ma': 212, 'long_sk': 141, 'long_sks': 53, 'long_sd': 14, 'long_lev': 4},
+    {'symbol': 'ICXUSDT', 'short_ma': 128, 'short_sk': 146, 'short_sks': 63, 'short_sd': 29, 'long_ma': 222, 'long_sk': 34, 'long_sks': 76, 'long_sd': 38, 'long_lev': 3},
+    {'symbol': 'MINAUSDT', 'short_ma': 314, 'short_sk': 148, 'short_sks': 5, 'short_sd': 33, 'long_ma': 51, 'long_sk': 114, 'long_sks': 74, 'long_sd': 39, 'long_lev': 5},
+    {'symbol': 'BSVUSDT', 'short_ma': 39, 'short_sk': 93, 'short_sks': 37, 'short_sd': 40, 'long_ma': 29, 'long_sk': 38, 'long_sks': 68, 'long_sd': 3, 'long_lev': 1},
+    {'symbol': '1000LUNCUSDT', 'short_ma': 130, 'short_sk': 121, 'short_sks': 38, 'short_sd': 13, 'long_ma': 71, 'long_sk': 22, 'long_sks': 5, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'CKBUSDT', 'short_ma': 306, 'short_sk': 138, 'short_sks': 62, 'short_sd': 45, 'long_ma': 72, 'long_sk': 149, 'long_sks': 11, 'long_sd': 40, 'long_lev': 5},
+    {'symbol': 'FETUSDT', 'short_ma': 136, 'short_sk': 103, 'short_sks': 70, 'short_sd': 19, 'long_ma': 326, 'long_sk': 75, 'long_sks': 13, 'long_sd': 19, 'long_lev': 4},
+    {'symbol': 'PHBUSDT', 'short_ma': 230, 'short_sk': 149, 'short_sks': 7, 'short_sd': 45, 'long_ma': 215, 'long_sk': 96, 'long_sks': 18, 'long_sd': 7, 'long_lev': 2},
+    {'symbol': 'SANTOSUSDT', 'short_ma': 185, 'short_sk': 136, 'short_sks': 16, 'short_sd': 50, 'long_ma': 93, 'long_sk': 16, 'long_sks': 21, 'long_sd': 7, 'long_lev': 5},
+    {'symbol': 'SUSHIUSDT', 'short_ma': 216, 'short_sk': 148, 'short_sks': 58, 'short_sd': 10, 'long_ma': 95, 'long_sk': 53, 'long_sks': 12, 'long_sd': 28, 'long_lev': 1},
+    {'symbol': 'EDUUSDT', 'short_ma': 39, 'short_sk': 147, 'short_sks': 54, 'short_sd': 47, 'long_ma': 118, 'long_sk': 48, 'long_sks': 12, 'long_sd': 15, 'long_lev': 1},
+    {'symbol': 'JUPUSDT', 'short_ma': 24, 'short_sk': 112, 'short_sks': 50, 'short_sd': 30, 'long_ma': 26, 'long_sk': 30, 'long_sks': 30, 'long_sd': 20, 'long_lev': 3},
+    {'symbol': '1000SATSUSDT', 'short_ma': 240, 'short_sk': 145, 'short_sks': 18, 'short_sd': 11, 'long_ma': 20, 'long_sk': 81, 'long_sks': 73, 'long_sd': 39, 'long_lev': 5},
+    {'symbol': 'ONGUSDT', 'short_ma': 274, 'short_sk': 121, 'short_sks': 8, 'short_sd': 9, 'long_ma': 72, 'long_sk': 112, 'long_sks': 11, 'long_sd': 37, 'long_lev': 5},
+    {'symbol': 'IMXUSDT', 'short_ma': 131, 'short_sk': 107, 'short_sks': 54, 'short_sd': 37, 'long_ma': 59, 'long_sk': 104, 'long_sks': 78, 'long_sd': 50, 'long_lev': 3},
+    {'symbol': 'AXSUSDT', 'short_ma': 297, 'short_sk': 14, 'short_sks': 45, 'short_sd': 16, 'long_ma': 331, 'long_sk': 19, 'long_sks': 33, 'long_sd': 4, 'long_lev': 4},
+    {'symbol': 'MORPHOUSDT', 'short_ma': 138, 'short_sk': 39, 'short_sks': 18, 'short_sd': 9, 'long_ma': 119, 'long_sk': 140, 'long_sks': 52, 'long_sd': 31, 'long_lev': 5},
+    {'symbol': 'WOOUSDT', 'short_ma': 109, 'short_sk': 150, 'short_sks': 80, 'short_sd': 20, 'long_ma': 65, 'long_sk': 84, 'long_sks': 78, 'long_sd': 31, 'long_lev': 3},
+    {'symbol': 'API3USDT', 'short_ma': 224, 'short_sk': 128, 'short_sks': 56, 'short_sd': 46, 'long_ma': 237, 'long_sk': 18, 'long_sks': 7, 'long_sd': 5, 'long_lev': 3},
+    {'symbol': '1000XECUSDT', 'short_ma': 231, 'short_sk': 130, 'short_sks': 39, 'short_sd': 9, 'long_ma': 228, 'long_sk': 32, 'long_sks': 14, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'SKLUSDT', 'short_ma': 250, 'short_sk': 125, 'short_sks': 19, 'short_sd': 37, 'long_ma': 240, 'long_sk': 60, 'long_sks': 60, 'long_sd': 43, 'long_lev': 4},
+    {'symbol': 'C98USDT', 'short_ma': 202, 'short_sk': 81, 'short_sks': 42, 'short_sd': 24, 'long_ma': 56, 'long_sk': 44, 'long_sks': 80, 'long_sd': 41, 'long_lev': 2},
+    {'symbol': 'IOSTUSDT', 'short_ma': 317, 'short_sk': 92, 'short_sks': 77, 'short_sd': 48, 'long_ma': 182, 'long_sk': 91, 'long_sks': 12, 'long_sd': 28, 'long_lev': 3},
+    {'symbol': 'CTSIUSDT', 'short_ma': 297, 'short_sk': 141, 'short_sks': 64, 'short_sd': 50, 'long_ma': 303, 'long_sk': 14, 'long_sks': 10, 'long_sd': 4, 'long_lev': 2},
+    {'symbol': 'ENJUSDT', 'short_ma': 145, 'short_sk': 82, 'short_sks': 9, 'short_sd': 19, 'long_ma': 242, 'long_sk': 35, 'long_sks': 21, 'long_sd': 32, 'long_lev': 2},
+    {'symbol': 'CFXUSDT', 'short_ma': 255, 'short_sk': 90, 'short_sks': 78, 'short_sd': 8, 'long_ma': 117, 'long_sk': 49, 'long_sks': 29, 'long_sd': 26, 'long_lev': 4},
+    {'symbol': 'IOTXUSDT', 'short_ma': 201, 'short_sk': 149, 'short_sks': 74, 'short_sd': 18, 'long_ma': 309, 'long_sk': 106, 'long_sks': 80, 'long_sd': 28, 'long_lev': 2},
+    {'symbol': 'VETUSDT', 'short_ma': 200, 'short_sk': 91, 'short_sks': 75, 'short_sd': 29, 'long_ma': 61, 'long_sk': 36, 'long_sks': 48, 'long_sd': 5, 'long_lev': 3},
+    {'symbol': '1000SHIBUSDT', 'short_ma': 283, 'short_sk': 110, 'short_sks': 7, 'short_sd': 26, 'long_ma': 266, 'long_sk': 81, 'long_sks': 6, 'long_sd': 8, 'long_lev': 3},
+    {'symbol': 'XVGUSDT', 'short_ma': 69, 'short_sk': 81, 'short_sks': 38, 'short_sd': 10, 'long_ma': 22, 'long_sk': 90, 'long_sks': 73, 'long_sd': 50, 'long_lev': 3},
+    {'symbol': 'GLMUSDT', 'short_ma': 75, 'short_sk': 17, 'short_sks': 11, 'short_sd': 13, 'long_ma': 35, 'long_sk': 142, 'long_sks': 13, 'long_sd': 33, 'long_lev': 5},
+    {'symbol': 'ANKRUSDT', 'short_ma': 340, 'short_sk': 142, 'short_sks': 62, 'short_sd': 29, 'long_ma': 188, 'long_sk': 139, 'long_sks': 29, 'long_sd': 24, 'long_lev': 3},
+    {'symbol': 'RVNUSDT', 'short_ma': 181, 'short_sk': 108, 'short_sks': 62, 'short_sd': 30, 'long_ma': 58, 'long_sk': 100, 'long_sks': 29, 'long_sd': 30, 'long_lev': 2},
+    {'symbol': 'ROSEUSDT', 'short_ma': 57, 'short_sk': 33, 'short_sks': 13, 'short_sd': 9, 'long_ma': 89, 'long_sk': 35, 'long_sks': 58, 'long_sd': 38, 'long_lev': 4},
+    {'symbol': 'AVAXUSDT', 'short_ma': 101, 'short_sk': 57, 'short_sks': 20, 'short_sd': 24, 'long_ma': 97, 'long_sk': 73, 'long_sks': 5, 'long_sd': 13, 'long_lev': 2},
+    {'symbol': 'KSMUSDT', 'short_ma': 283, 'short_sk': 16, 'short_sks': 7, 'short_sd': 9, 'long_ma': 337, 'long_sk': 36, 'long_sks': 14, 'long_sd': 14, 'long_lev': 1},
+    {'symbol': 'HOTUSDT', 'short_ma': 180, 'short_sk': 115, 'short_sks': 51, 'short_sd': 45, 'long_ma': 93, 'long_sk': 127, 'long_sks': 13, 'long_sd': 24, 'long_lev': 3},
+    {'symbol': 'ENSUSDT', 'short_ma': 249, 'short_sk': 94, 'short_sks': 29, 'short_sd': 41, 'long_ma': 322, 'long_sk': 28, 'long_sks': 27, 'long_sd': 15, 'long_lev': 3},
+    {'symbol': 'TUSDT', 'short_ma': 268, 'short_sk': 17, 'short_sks': 11, 'short_sd': 23, 'long_ma': 58, 'long_sk': 122, 'long_sks': 37, 'long_sd': 37, 'long_lev': 3},
+    {'symbol': 'IOTAUSDT', 'short_ma': 166, 'short_sk': 146, 'short_sks': 60, 'short_sd': 50, 'long_ma': 239, 'long_sk': 71, 'long_sks': 29, 'long_sd': 14, 'long_lev': 2},
+    {'symbol': 'GTCUSDT', 'short_ma': 224, 'short_sk': 127, 'short_sks': 80, 'short_sd': 45, 'long_ma': 66, 'long_sk': 40, 'long_sks': 14, 'long_sd': 49, 'long_lev': 3},
+    {'symbol': 'NEARUSDT', 'short_ma': 170, 'short_sk': 116, 'short_sks': 70, 'short_sd': 28, 'long_ma': 216, 'long_sk': 66, 'long_sks': 13, 'long_sd': 27, 'long_lev': 2},
+    {'symbol': 'TWTUSDT', 'short_ma': 320, 'short_sk': 146, 'short_sks': 43, 'short_sd': 41, 'long_ma': 56, 'long_sk': 81, 'long_sks': 53, 'long_sd': 50, 'long_lev': 5},
+    {'symbol': 'SPELLUSDT', 'short_ma': 229, 'short_sk': 95, 'short_sks': 57, 'short_sd': 42, 'long_ma': 79, 'long_sk': 36, 'long_sks': 6, 'long_sd': 4, 'long_lev': 3},
+    {'symbol': 'RSRUSDT', 'short_ma': 84, 'short_sk': 148, 'short_sks': 12, 'short_sd': 47, 'long_ma': 44, 'long_sk': 90, 'long_sks': 55, 'long_sd': 9, 'long_lev': 4},
+    {'symbol': 'FILUSDT', 'short_ma': 280, 'short_sk': 16, 'short_sks': 10, 'short_sd': 8, 'long_ma': 278, 'long_sk': 86, 'long_sks': 18, 'long_sd': 3, 'long_lev': 2},
+    {'symbol': 'TRUUSDT', 'short_ma': 271, 'short_sk': 139, 'short_sks': 72, 'short_sd': 24, 'long_ma': 173, 'long_sk': 19, 'long_sks': 33, 'long_sd': 8, 'long_lev': 4},
     {'symbol': 'GASUSDT', 'short_ma': 52, 'short_sk': 134, 'short_sks': 55, 'short_sd': 24, 'long_ma': 309, 'long_sk': 150, 'long_sks': 80, 'long_sd': 34, 'long_lev': 5},
-    {'symbol': 'POLYXUSDT', 'short_ma': 239, 'short_sk': 122, 'short_sks': 65, 'short_sd': 35, 'long_ma': 87, 'long_sk': 66, 'long_sks': 79, 'long_sd': 28, 'long_lev': 3},
-    {'symbol': 'NEARUSDT', 'short_ma': 174, 'short_sk': 81, 'short_sks': 70, 'short_sd': 26, 'long_ma': 244, 'long_sk': 91, 'long_sks': 28, 'long_sd': 18, 'long_lev': 2},
-    {'symbol': 'BEAMXUSDT', 'short_ma': 106, 'short_sk': 127, 'short_sks': 58, 'short_sd': 19, 'long_ma': 47, 'long_sk': 106, 'long_sks': 63, 'long_sd': 4, 'long_lev': 2},
-    {'symbol': 'ICPUSDT', 'short_ma': 39, 'short_sk': 129, 'short_sks': 69, 'short_sd': 8, 'long_ma': 30, 'long_sk': 104, 'long_sks': 55, 'long_sd': 16, 'long_lev': 2},
-    {'symbol': 'GALAUSDT', 'short_ma': 57, 'short_sk': 139, 'short_sks': 33, 'short_sd': 10, 'long_ma': 322, 'long_sk': 114, 'long_sks': 26, 'long_sd': 19, 'long_lev': 3},
-    {'symbol': 'ACHUSDT', 'short_ma': 63, 'short_sk': 83, 'short_sks': 32, 'short_sd': 48, 'long_ma': 236, 'long_sk': 32, 'long_sks': 20, 'long_sd': 23, 'long_lev': 3},
-    {'symbol': 'AIUSDT', 'short_ma': 96, 'short_sk': 63, 'short_sks': 62, 'short_sd': 22, 'long_ma': 40, 'long_sk': 58, 'long_sks': 78, 'long_sd': 47, 'long_lev': 2},
-    {'symbol': 'HBARUSDT', 'short_ma': 129, 'short_sk': 102, 'short_sks': 76, 'short_sd': 46, 'long_ma': 237, 'long_sk': 111, 'long_sks': 25, 'long_sd': 10, 'long_lev': 2},
-    {'symbol': 'BBUSDT', 'short_ma': 225, 'short_sk': 136, 'short_sks': 71, 'short_sd': 32, 'long_ma': 137, 'long_sk': 118, 'long_sks': 5, 'long_sd': 44, 'long_lev': 3},
-    {'symbol': '1000SHIBUSDT', 'short_ma': 96, 'short_sk': 86, 'short_sks': 61, 'short_sd': 20, 'long_ma': 266, 'long_sk': 38, 'long_sks': 56, 'long_sd': 16, 'long_lev': 3},
-    {'symbol': 'ONEUSDT', 'short_ma': 123, 'short_sk': 78, 'short_sks': 50, 'short_sd': 44, 'long_ma': 249, 'long_sk': 42, 'long_sks': 27, 'long_sd': 15, 'long_lev': 3},
-    {'symbol': 'BRETTUSDT', 'short_ma': 296, 'short_sk': 84, 'short_sks': 26, 'short_sd': 43, 'long_ma': 50, 'long_sk': 59, 'long_sks': 67, 'long_sd': 41, 'long_lev': 2},
-    {'symbol': 'THETAUSDT', 'short_ma': 98, 'short_sk': 91, 'short_sks': 69, 'short_sd': 25, 'long_ma': 326, 'long_sk': 96, 'long_sks': 21, 'long_sd': 13, 'long_lev': 2},
-    {'symbol': 'NOTUSDT', 'short_ma': 40, 'short_sk': 144, 'short_sks': 67, 'short_sd': 45, 'long_ma': 231, 'long_sk': 21, 'long_sks': 18, 'long_sd': 5, 'long_lev': 3},
-    {'symbol': 'SAGAUSDT', 'short_ma': 253, 'short_sk': 116, 'short_sks': 74, 'short_sd': 41, 'long_ma': 43, 'long_sk': 78, 'long_sks': 77, 'long_sd': 6, 'long_lev': 5},
-    {'symbol': 'ZROUSDT', 'short_ma': 116, 'short_sk': 84, 'short_sks': 50, 'short_sd': 29, 'long_ma': 105, 'long_sk': 78, 'long_sks': 34, 'long_sd': 7, 'long_lev': 2},
-    {'symbol': 'XLMUSDT', 'short_ma': 293, 'short_sk': 63, 'short_sks': 75, 'short_sd': 35, 'long_ma': 273, 'long_sk': 19, 'long_sks': 23, 'long_sd': 7, 'long_lev': 2},
-    {'symbol': 'TUSDT', 'short_ma': 124, 'short_sk': 146, 'short_sks': 80, 'short_sd': 31, 'long_ma': 66, 'long_sk': 119, 'long_sks': 42, 'long_sd': 19, 'long_lev': 3},
-    {'symbol': 'ETCUSDT', 'short_ma': 335, 'short_sk': 84, 'short_sks': 80, 'short_sd': 36, 'long_ma': 237, 'long_sk': 49, 'long_sks': 30, 'long_sd': 4, 'long_lev': 2},
-    {'symbol': 'RVNUSDT', 'short_ma': 165, 'short_sk': 146, 'short_sks': 46, 'short_sd': 22, 'long_ma': 57, 'long_sk': 111, 'long_sks': 42, 'long_sd': 15, 'long_lev': 2},
-    {'symbol': 'SCRTUSDT', 'short_ma': 72, 'short_sk': 49, 'short_sks': 5, 'short_sd': 39, 'long_ma': 223, 'long_sk': 20, 'long_sks': 27, 'long_sd': 3, 'long_lev': 5},
-    {'symbol': 'JOEUSDT', 'short_ma': 207, 'short_sk': 124, 'short_sks': 78, 'short_sd': 50, 'long_ma': 310, 'long_sk': 17, 'long_sks': 37, 'long_sd': 8, 'long_lev': 3},
-    {'symbol': 'GRTUSDT', 'short_ma': 109, 'short_sk': 75, 'short_sks': 27, 'short_sd': 45, 'long_ma': 346, 'long_sk': 32, 'long_sks': 30, 'long_sd': 9, 'long_lev': 2},
-    {'symbol': 'SAFEUSDT', 'short_ma': 167, 'short_sk': 29, 'short_sks': 59, 'short_sd': 40, 'long_ma': 49, 'long_sk': 150, 'long_sks': 67, 'long_sd': 31, 'long_lev': 4},
-    {'symbol': 'QNTUSDT', 'short_ma': 288, 'short_sk': 142, 'short_sks': 54, 'short_sd': 38, 'long_ma': 207, 'long_sk': 80, 'long_sks': 21, 'long_sd': 6, 'long_lev': 5},
-    {'symbol': 'MOCAUSDT', 'short_ma': 320, 'short_sk': 148, 'short_sks': 79, 'short_sd': 50, 'long_ma': 348, 'long_sk': 139, 'long_sks': 76, 'long_sd': 32, 'long_lev': 3},
-    {'symbol': 'FLOWUSDT', 'short_ma': 221, 'short_sk': 59, 'short_sks': 25, 'short_sd': 28, 'long_ma': 56, 'long_sk': 100, 'long_sks': 29, 'long_sd': 24, 'long_lev': 2},
-    {'symbol': 'STORJUSDT', 'short_ma': 79, 'short_sk': 44, 'short_sks': 47, 'short_sd': 15, 'long_ma': 64, 'long_sk': 71, 'long_sks': 23, 'long_sd': 13, 'long_lev': 2},
-    {'symbol': 'ONGUSDT', 'short_ma': 190, 'short_sk': 149, 'short_sks': 76, 'short_sd': 46, 'long_ma': 44, 'long_sk': 124, 'long_sks': 12, 'long_sd': 35, 'long_lev': 4},
-    {'symbol': 'SONICUSDT', 'short_ma': 85, 'short_sk': 142, 'short_sks': 46, 'short_sd': 38, 'long_ma': 329, 'long_sk': 138, 'long_sks': 80, 'long_sd': 46, 'long_lev': 4},
-    {'symbol': '1000CHEEMSUSDT', 'short_ma': 71, 'short_sk': 150, 'short_sks': 46, 'short_sd': 46, 'long_ma': 112, 'long_sk': 110, 'long_sks': 63, 'long_sd': 40, 'long_lev': 3},
-    {'symbol': 'ANKRUSDT', 'short_ma': 343, 'short_sk': 148, 'short_sks': 66, 'short_sd': 35, 'long_ma': 124, 'long_sk': 64, 'long_sks': 14, 'long_sd': 22, 'long_lev': 3},
-    {'symbol': 'MANTAUSDT', 'short_ma': 237, 'short_sk': 81, 'short_sks': 39, 'short_sd': 10, 'long_ma': 58, 'long_sk': 92, 'long_sks': 79, 'long_sd': 43, 'long_lev': 2},
-    {'symbol': 'OPUSDT', 'short_ma': 343, 'short_sk': 148, 'short_sks': 76, 'short_sd': 48, 'long_ma': 243, 'long_sk': 22, 'long_sks': 17, 'long_sd': 20, 'long_lev': 3},
-    {'symbol': 'JUPUSDT', 'short_ma': 86, 'short_sk': 150, 'short_sks': 63, 'short_sd': 29, 'long_ma': 23, 'long_sk': 67, 'long_sks': 74, 'long_sd': 18, 'long_lev': 2},
-    {'symbol': 'LSKUSDT', 'short_ma': 81, 'short_sk': 103, 'short_sks': 66, 'short_sd': 47, 'long_ma': 67, 'long_sk': 77, 'long_sks': 59, 'long_sd': 23, 'long_lev': 3},
-    {'symbol': 'SKLUSDT', 'short_ma': 120, 'short_sk': 118, 'short_sks': 80, 'short_sd': 48, 'long_ma': 245, 'long_sk': 84, 'long_sks': 71, 'long_sd': 8, 'long_lev': 3},
-    {'symbol': 'ACTUSDT', 'short_ma': 302, 'short_sk': 47, 'short_sks': 26, 'short_sd': 31, 'long_ma': 42, 'long_sk': 142, 'long_sks': 76, 'long_sd': 19, 'long_lev': 1},
-    {'symbol': 'HOTUSDT', 'short_ma': 181, 'short_sk': 139, 'short_sks': 57, 'short_sd': 33, 'long_ma': 282, 'long_sk': 19, 'long_sks': 20, 'long_sd': 15, 'long_lev': 2},
-    {'symbol': 'MASKUSDT', 'short_ma': 125, 'short_sk': 143, 'short_sks': 68, 'short_sd': 20, 'long_ma': 260, 'long_sk': 124, 'long_sks': 23, 'long_sd': 21, 'long_lev': 2},
-    {'symbol': 'STRKUSDT', 'short_ma': 168, 'short_sk': 117, 'short_sks': 55, 'short_sd': 48, 'long_ma': 34, 'long_sk': 100, 'long_sks': 39, 'long_sd': 19, 'long_lev': 1},
-    {'symbol': '1000SATSUSDT', 'short_ma': 344, 'short_sk': 99, 'short_sks': 34, 'short_sd': 7, 'long_ma': 27, 'long_sk': 115, 'long_sks': 69, 'long_sd': 18, 'long_lev': 3},
-    {'symbol': 'NMRUSDT', 'short_ma': 348, 'short_sk': 137, 'short_sks': 78, 'short_sd': 25, 'long_ma': 244, 'long_sk': 75, 'long_sks': 80, 'long_sd': 49, 'long_lev': 2},
-    {'symbol': 'IOUSDT', 'short_ma': 124, 'short_sk': 132, 'short_sks': 57, 'short_sd': 40, 'long_ma': 213, 'long_sk': 77, 'long_sks': 50, 'long_sd': 34, 'long_lev': 4},
-    {'symbol': 'ILVUSDT', 'short_ma': 182, 'short_sk': 98, 'short_sks': 71, 'short_sd': 49, 'long_ma': 64, 'long_sk': 118, 'long_sks': 53, 'long_sd': 30, 'long_lev': 2},
-    {'symbol': 'IOTAUSDT', 'short_ma': 147, 'short_sk': 131, 'short_sks': 59, 'short_sd': 47, 'long_ma': 239, 'long_sk': 71, 'long_sks': 29, 'long_sd': 15, 'long_lev': 1},
-    {'symbol': 'WOOUSDT', 'short_ma': 198, 'short_sk': 149, 'short_sks': 73, 'short_sd': 43, 'long_ma': 37, 'long_sk': 147, 'long_sks': 57, 'long_sd': 7, 'long_lev': 2},
-    {'symbol': 'AEVOUSDT', 'short_ma': 183, 'short_sk': 121, 'short_sks': 77, 'short_sd': 13, 'long_ma': 20, 'long_sk': 64, 'long_sks': 80, 'long_sd': 24, 'long_lev': 1},
-    {'symbol': '1000LUNCUSDT', 'short_ma': 108, 'short_sk': 117, 'short_sks': 30, 'short_sd': 24, 'long_ma': 244, 'long_sk': 19, 'long_sks': 5, 'long_sd': 4, 'long_lev': 1},
-    {'symbol': 'ICXUSDT', 'short_ma': 120, 'short_sk': 148, 'short_sks': 62, 'short_sd': 30, 'long_ma': 224, 'long_sk': 112, 'long_sks': 45, 'long_sd': 42, 'long_lev': 3},
-    {'symbol': 'ALGOUSDT', 'short_ma': 347, 'short_sk': 149, 'short_sks': 12, 'short_sd': 26, 'long_ma': 58, 'long_sk': 120, 'long_sks': 22, 'long_sd': 39, 'long_lev': 1},
-    {'symbol': 'LQTYUSDT', 'short_ma': 220, 'short_sk': 68, 'short_sks': 59, 'short_sd': 29, 'long_ma': 284, 'long_sk': 74, 'long_sks': 25, 'long_sd': 13, 'long_lev': 1},
-    {'symbol': 'ORCAUSDT', 'short_ma': 164, 'short_sk': 77, 'short_sks': 35, 'short_sd': 48, 'long_ma': 56, 'long_sk': 82, 'long_sks': 79, 'long_sd': 38, 'long_lev': 5},
-    {'symbol': 'ARUSDT', 'short_ma': 141, 'short_sk': 48, 'short_sks': 28, 'short_sd': 6, 'long_ma': 192, 'long_sk': 145, 'long_sks': 58, 'long_sd': 9, 'long_lev': 1},
-    {'symbol': 'DUSKUSDT', 'short_ma': 108, 'short_sk': 109, 'short_sks': 64, 'short_sd': 39, 'long_ma': 39, 'long_sk': 148, 'long_sks': 57, 'long_sd': 25, 'long_lev': 1},
-    {'symbol': '1000RATSUSDT', 'short_ma': 63, 'short_sk': 130, 'short_sks': 67, 'short_sd': 40, 'long_ma': 31, 'long_sk': 133, 'long_sks': 26, 'long_sd': 19, 'long_lev': 1},
-    {'symbol': 'QTUMUSDT', 'short_ma': 223, 'short_sk': 108, 'short_sks': 60, 'short_sd': 24, 'long_ma': 197, 'long_sk': 101, 'long_sks': 16, 'long_sd': 11, 'long_lev': 1},
-    {'symbol': 'ZRXUSDT', 'short_ma': 179, 'short_sk': 121, 'short_sks': 54, 'short_sd': 33, 'long_ma': 115, 'long_sk': 17, 'long_sks': 26, 'long_sd': 19, 'long_lev': 1},
-    {'symbol': 'AGLDUSDT', 'short_ma': 335, 'short_sk': 145, 'short_sks': 77, 'short_sd': 50, 'long_ma': 293, 'long_sk': 101, 'long_sks': 62, 'long_sd': 38, 'long_lev': 2},
-    {'symbol': 'EGLDUSDT', 'short_ma': 248, 'short_sk': 127, 'short_sks': 80, 'short_sd': 31, 'long_ma': 183, 'long_sk': 80, 'long_sks': 29, 'long_sd': 17, 'long_lev': 2},
-    {'symbol': 'ZENUSDT', 'short_ma': 298, 'short_sk': 126, 'short_sks': 11, 'short_sd': 17, 'long_ma': 260, 'long_sk': 61, 'long_sks': 28, 'long_sd': 14, 'long_lev': 1},
-    {'symbol': 'CRVUSDT', 'short_ma': 222, 'short_sk': 135, 'short_sks': 35, 'short_sd': 44, 'long_ma': 185, 'long_sk': 94, 'long_sks': 14, 'long_sd': 3, 'long_lev': 1},
-    {'symbol': 'NEOUSDT', 'short_ma': 331, 'short_sk': 96, 'short_sks': 47, 'short_sd': 34, 'long_ma': 345, 'long_sk': 14, 'long_sks': 5, 'long_sd': 14, 'long_lev': 1},
-    {'symbol': 'DYDXUSDT', 'short_ma': 244, 'short_sk': 34, 'short_sks': 22, 'short_sd': 26, 'long_ma': 51, 'long_sk': 86, 'long_sks': 25, 'long_sd': 5, 'long_lev': 1},
-    {'symbol': 'ALTUSDT', 'short_ma': 148, 'short_sk': 147, 'short_sks': 51, 'short_sd': 48, 'long_ma': 24, 'long_sk': 109, 'long_sks': 72, 'long_sd': 5, 'long_lev': 1},
-    {'symbol': 'ATOMUSDT', 'short_ma': 62, 'short_sk': 129, 'short_sks': 58, 'short_sd': 9, 'long_ma': 188, 'long_sk': 41, 'long_sks': 60, 'long_sd': 21, 'long_lev': 1},
-    {'symbol': 'HFTUSDT', 'short_ma': 331, 'short_sk': 148, 'short_sks': 78, 'short_sd': 43, 'long_ma': 21, 'long_sk': 133, 'long_sks': 50, 'long_sd': 27, 'long_lev': 1},
-    {'symbol': 'RIFUSDT', 'short_ma': 232, 'short_sk': 67, 'short_sks': 63, 'short_sd': 36, 'long_ma': 20, 'long_sk': 86, 'long_sks': 30, 'long_sd': 21, 'long_lev': 1},
-    {'symbol': 'CHRUSDT', 'short_ma': 99, 'short_sk': 150, 'short_sks': 57, 'short_sd': 44, 'long_ma': 233, 'long_sk': 93, 'long_sks': 80, 'long_sd': 44, 'long_lev': 1},
-    {'symbol': 'XTZUSDT', 'short_ma': 252, 'short_sk': 107, 'short_sks': 55, 'short_sd': 46, 'long_ma': 194, 'long_sk': 92, 'long_sks': 33, 'long_sd': 9, 'long_lev': 1},
-    {'symbol': 'DOTUSDT', 'short_ma': 210, 'short_sk': 101, 'short_sks': 46, 'short_sd': 4, 'long_ma': 86, 'long_sk': 121, 'long_sks': 35, 'long_sd': 6, 'long_lev': 1},
-    {'symbol': 'MEMEUSDT', 'short_ma': 99, 'short_sk': 95, 'short_sks': 75, 'short_sd': 49, 'long_ma': 37, 'long_sk': 52, 'long_sks': 64, 'long_sd': 43, 'long_lev': 1},
-    {'symbol': 'COMPUSDT', 'short_ma': 288, 'short_sk': 130, 'short_sks': 39, 'short_sd': 22, 'long_ma': 152, 'long_sk': 89, 'long_sks': 64, 'long_sd': 12, 'long_lev': 1},
-    {'symbol': 'LPTUSDT', 'short_ma': 94, 'short_sk': 62, 'short_sks': 35, 'short_sd': 22, 'long_ma': 155, 'long_sk': 57, 'long_sks': 20, 'long_sd': 7, 'long_lev': 1},
-    {'symbol': 'SPELLUSDT', 'short_ma': 114, 'short_sk': 97, 'short_sks': 59, 'short_sd': 31, 'long_ma': 45, 'long_sk': 142, 'long_sks': 33, 'long_sd': 20, 'long_lev': 1},
-    {'symbol': 'AXLUSDT', 'short_ma': 98, 'short_sk': 124, 'short_sks': 60, 'short_sd': 16, 'long_ma': 33, 'long_sk': 110, 'long_sks': 80, 'long_sd': 17, 'long_lev': 1},
-    {'symbol': 'LISTAUSDT', 'short_ma': 56, 'short_sk': 116, 'short_sks': 8, 'short_sd': 23, 'long_ma': 39, 'long_sk': 140, 'long_sks': 59, 'long_sd': 18, 'long_lev': 1},
-    {'symbol': 'CTSIUSDT', 'short_ma': 221, 'short_sk': 135, 'short_sks': 71, 'short_sd': 38, 'long_ma': 293, 'long_sk': 138, 'long_sks': 9, 'long_sd': 22, 'long_lev': 1},
-    {'symbol': 'GMTUSDT', 'short_ma': 107, 'short_sk': 140, 'short_sks': 67, 'short_sd': 47, 'long_ma': 265, 'long_sk': 18, 'long_sks': 12, 'long_sd': 11, 'long_lev': 1},
-    {'symbol': 'NTRNUSDT', 'short_ma': 324, 'short_sk': 137, 'short_sks': 66, 'short_sd': 46, 'long_ma': 55, 'long_sk': 130, 'long_sks': 39, 'long_sd': 25, 'long_lev': 2},
-    {'symbol': 'TWTUSDT', 'short_ma': 200, 'short_sk': 26, 'short_sks': 33, 'short_sd': 14, 'long_ma': 348, 'long_sk': 106, 'long_sks': 9, 'long_sd': 12, 'long_lev': 1},
-    {'symbol': '1INCHUSDT', 'short_ma': 202, 'short_sk': 106, 'short_sks': 59, 'short_sd': 30, 'long_ma': 76, 'long_sk': 40, 'long_sks': 23, 'long_sd': 4, 'long_lev': 1},
-    {'symbol': 'ENJUSDT', 'short_ma': 142, 'short_sk': 150, 'short_sks': 8, 'short_sd': 40, 'long_ma': 249, 'long_sk': 147, 'long_sks': 52, 'long_sd': 24, 'long_lev': 1},
-    {'symbol': 'ALICEUSDT', 'short_ma': 94, 'short_sk': 54, 'short_sks': 7, 'short_sd': 24, 'long_ma': 306, 'long_sk': 15, 'long_sks': 80, 'long_sd': 35, 'long_lev': 1},
-    {'symbol': 'CHZUSDT', 'short_ma': 323, 'short_sk': 117, 'short_sks': 73, 'short_sd': 44, 'long_ma': 119, 'long_sk': 144, 'long_sks': 32, 'long_sd': 27, 'long_lev': 1},
-    {'symbol': 'SUSHIUSDT', 'short_ma': 216, 'short_sk': 147, 'short_sks': 60, 'short_sd': 17, 'long_ma': 97, 'long_sk': 146, 'long_sks': 15, 'long_sd': 25, 'long_lev': 1},
-    {'symbol': 'ACEUSDT', 'short_ma': 191, 'short_sk': 70, 'short_sks': 65, 'short_sd': 46, 'long_ma': 22, 'long_sk': 143, 'long_sks': 80, 'long_sd': 24, 'long_lev': 1},
-    {'symbol': 'MANAUSDT', 'short_ma': 128, 'short_sk': 150, 'short_sks': 78, 'short_sd': 32, 'long_ma': 45, 'long_sk': 42, 'long_sks': 80, 'long_sd': 44, 'long_lev': 1},
-    {'symbol': 'AAVEUSDT', 'short_ma': 131, 'short_sk': 131, 'short_sks': 76, 'short_sd': 29, 'long_ma': 272, 'long_sk': 67, 'long_sks': 19, 'long_sd': 24, 'long_lev': 1},
-    {'symbol': 'XVSUSDT', 'short_ma': 65, 'short_sk': 146, 'short_sks': 74, 'short_sd': 15, 'long_ma': 21, 'long_sk': 150, 'long_sks': 53, 'long_sd': 15, 'long_lev': 1},
-    {'symbol': 'ORDIUSDT', 'short_ma': 144, 'short_sk': 85, 'short_sks': 77, 'short_sd': 42, 'long_ma': 24, 'long_sk': 112, 'long_sks': 61, 'long_sd': 3, 'long_lev': 1},
-    {'symbol': 'KSMUSDT', 'short_ma': 115, 'short_sk': 113, 'short_sks': 39, 'short_sd': 50, 'long_ma': 213, 'long_sk': 140, 'long_sks': 14, 'long_sd': 22, 'long_lev': 1},
-    {'symbol': 'YFIUSDT', 'short_ma': 219, 'short_sk': 113, 'short_sks': 39, 'short_sd': 43, 'long_ma': 96, 'long_sk': 95, 'long_sks': 19, 'long_sd': 5, 'long_lev': 1},
-    {'symbol': 'DENTUSDT', 'short_ma': 126, 'short_sk': 143, 'short_sks': 75, 'short_sd': 23, 'long_ma': 292, 'long_sk': 141, 'long_sks': 24, 'long_sd': 18, 'long_lev': 1},
-    {'symbol': 'RONINUSDT', 'short_ma': 67, 'short_sk': 125, 'short_sks': 52, 'short_sd': 44, 'long_ma': 177, 'long_sk': 48, 'long_sks': 23, 'long_sd': 11, 'long_lev': 1},
-    {'symbol': 'KASUSDT', 'short_ma': 151, 'short_sk': 139, 'short_sks': 61, 'short_sd': 46, 'long_ma': 251, 'long_sk': 27, 'long_sks': 33, 'long_sd': 37, 'long_lev': 1},
-    {'symbol': 'API3USDT', 'short_ma': 230, 'short_sk': 142, 'short_sks': 49, 'short_sd': 46, 'long_ma': 79, 'long_sk': 72, 'long_sks': 56, 'long_sd': 8, 'long_lev': 1},
-    {'symbol': 'KNCUSDT', 'short_ma': 77, 'short_sk': 136, 'short_sks': 32, 'short_sd': 3, 'long_ma': 282, 'long_sk': 94, 'long_sks': 28, 'long_sd': 14, 'long_lev': 1},
-    {'symbol': 'XAIUSDT', 'short_ma': 88, 'short_sk': 107, 'short_sks': 58, 'short_sd': 42, 'long_ma': 209, 'long_sk': 136, 'long_sks': 71, 'long_sd': 35, 'long_lev': 1},
-    {'symbol': 'SNXUSDT', 'short_ma': 38, 'short_sk': 130, 'short_sks': 57, 'short_sd': 16, 'long_ma': 124, 'long_sk': 55, 'long_sks': 63, 'long_sd': 35, 'long_lev': 1},
-    {'symbol': 'ATAUSDT', 'short_ma': 95, 'short_sk': 148, 'short_sks': 46, 'short_sd': 20, 'long_ma': 56, 'long_sk': 109, 'long_sks': 60, 'long_sd': 40, 'long_lev': 1},
+    {'symbol': 'SNXUSDT', 'short_ma': 38, 'short_sk': 133, 'short_sks': 56, 'short_sd': 20, 'long_ma': 125, 'long_sk': 80, 'long_sks': 54, 'long_sd': 24, 'long_lev': 1},
+    {'symbol': 'SUPERUSDT', 'short_ma': 22, 'short_sk': 150, 'short_sks': 55, 'short_sd': 45, 'long_ma': 208, 'long_sk': 82, 'long_sks': 76, 'long_sd': 39, 'long_lev': 5},
+    {'symbol': 'LDOUSDT', 'short_ma': 37, 'short_sk': 144, 'short_sks': 79, 'short_sd': 6, 'long_ma': 22, 'long_sk': 129, 'long_sks': 73, 'long_sd': 41, 'long_lev': 3},
+    {'symbol': 'GMXUSDT', 'short_ma': 54, 'short_sk': 14, 'short_sks': 18, 'short_sd': 6, 'long_ma': 179, 'long_sk': 134, 'long_sks': 33, 'long_sd': 39, 'long_lev': 2},
+    {'symbol': 'ZRXUSDT', 'short_ma': 198, 'short_sk': 120, 'short_sks': 53, 'short_sd': 39, 'long_ma': 347, 'long_sk': 95, 'long_sks': 24, 'long_sd': 15, 'long_lev': 2},
+    {'symbol': 'ATAUSDT', 'short_ma': 94, 'short_sk': 147, 'short_sks': 75, 'short_sd': 10, 'long_ma': 50, 'long_sk': 51, 'long_sks': 37, 'long_sd': 42, 'long_lev': 2},
+    {'symbol': 'XVSUSDT', 'short_ma': 20, 'short_sk': 17, 'short_sks': 12, 'short_sd': 20, 'long_ma': 232, 'long_sk': 55, 'long_sks': 79, 'long_sd': 19, 'long_lev': 2},
+    {'symbol': 'LPTUSDT', 'short_ma': 84, 'short_sk': 17, 'short_sks': 57, 'short_sd': 8, 'long_ma': 260, 'long_sk': 83, 'long_sks': 12, 'long_sd': 22, 'long_lev': 1},
+    {'symbol': 'EGLDUSDT', 'short_ma': 241, 'short_sk': 17, 'short_sks': 15, 'short_sd': 9, 'long_ma': 336, 'long_sk': 37, 'long_sks': 29, 'long_sd': 4, 'long_lev': 3},
+    {'symbol': 'CELOUSDT', 'short_ma': 248, 'short_sk': 124, 'short_sks': 80, 'short_sd': 45, 'long_ma': 335, 'long_sk': 93, 'long_sks': 75, 'long_sd': 15, 'long_lev': 2},
+    {'symbol': 'NMRUSDT', 'short_ma': 307, 'short_sk': 116, 'short_sks': 50, 'short_sd': 7, 'long_ma': 229, 'long_sk': 75, 'long_sks': 80, 'long_sd': 49, 'long_lev': 2},
+    {'symbol': 'DYDXUSDT', 'short_ma': 68, 'short_sk': 38, 'short_sks': 19, 'short_sd': 28, 'long_ma': 51, 'long_sk': 150, 'long_sks': 17, 'long_sd': 35, 'long_lev': 3},
+    {'symbol': 'QNTUSDT', 'short_ma': 262, 'short_sk': 143, 'short_sks': 58, 'short_sd': 32, 'long_ma': 286, 'long_sk': 20, 'long_sks': 27, 'long_sd': 8, 'long_lev': 3},
+    {'symbol': 'ARKUSDT', 'short_ma': 56, 'short_sk': 89, 'short_sks': 7, 'short_sd': 6, 'long_ma': 60, 'long_sk': 92, 'long_sks': 70, 'long_sd': 49, 'long_lev': 3},
+    {'symbol': 'RUNEUSDT', 'short_ma': 290, 'short_sk': 131, 'short_sks': 28, 'short_sd': 49, 'long_ma': 270, 'long_sk': 19, 'long_sks': 38, 'long_sd': 5, 'long_lev': 2},
+    {'symbol': 'APTUSDT', 'short_ma': 233, 'short_sk': 79, 'short_sks': 80, 'short_sd': 6, 'long_ma': 49, 'long_sk': 120, 'long_sks': 29, 'long_sd': 33, 'long_lev': 1},
+    {'symbol': 'XTZUSDT', 'short_ma': 348, 'short_sk': 117, 'short_sks': 58, 'short_sd': 29, 'long_ma': 92, 'long_sk': 113, 'long_sks': 26, 'long_sd': 20, 'long_lev': 4},
+    {'symbol': 'ARCUSDT', 'short_ma': 126, 'short_sk': 150, 'short_sks': 77, 'short_sd': 45, 'long_ma': 177, 'long_sk': 123, 'long_sks': 24, 'long_sd': 12, 'long_lev': 1},
+    {'symbol': 'ZILUSDT', 'short_ma': 283, 'short_sk': 83, 'short_sks': 7, 'short_sd': 22, 'long_ma': 285, 'long_sk': 96, 'long_sks': 24, 'long_sd': 25, 'long_lev': 2},
+    {'symbol': 'ARUSDT', 'short_ma': 289, 'short_sk': 76, 'short_sks': 9, 'short_sd': 9, 'long_ma': 192, 'long_sk': 143, 'long_sks': 61, 'long_sd': 3, 'long_lev': 3},
+    {'symbol': 'YFIUSDT', 'short_ma': 350, 'short_sk': 149, 'short_sks': 71, 'short_sd': 41, 'long_ma': 213, 'long_sk': 21, 'long_sks': 27, 'long_sd': 6, 'long_lev': 2},
+    {'symbol': 'ALGOUSDT', 'short_ma': 274, 'short_sk': 121, 'short_sks': 50, 'short_sd': 24, 'long_ma': 46, 'long_sk': 48, 'long_sks': 25, 'long_sd': 7, 'long_lev': 2},
+    {'symbol': 'DODOXUSDT', 'short_ma': 231, 'short_sk': 142, 'short_sks': 28, 'short_sd': 25, 'long_ma': 68, 'long_sk': 126, 'long_sks': 78, 'long_sd': 43, 'long_lev': 2},
+    {'symbol': 'ONTUSDT', 'short_ma': 350, 'short_sk': 121, 'short_sks': 70, 'short_sd': 48, 'long_ma': 72, 'long_sk': 61, 'long_sks': 23, 'long_sd': 19, 'long_lev': 1},
+    {'symbol': 'TAOUSDT', 'short_ma': 88, 'short_sk': 98, 'short_sks': 16, 'short_sd': 3, 'long_ma': 151, 'long_sk': 44, 'long_sks': 78, 'long_sd': 39, 'long_lev': 5},
+    {'symbol': 'ALICEUSDT', 'short_ma': 175, 'short_sk': 41, 'short_sks': 6, 'short_sd': 32, 'long_ma': 32, 'long_sk': 18, 'long_sks': 64, 'long_sd': 9, 'long_lev': 1},
+    {'symbol': 'LRCUSDT', 'short_ma': 261, 'short_sk': 129, 'short_sks': 31, 'short_sd': 50, 'long_ma': 224, 'long_sk': 16, 'long_sks': 21, 'long_sd': 36, 'long_lev': 2},
+    {'symbol': 'NEOUSDT', 'short_ma': 330, 'short_sk': 33, 'short_sks': 72, 'short_sd': 46, 'long_ma': 350, 'long_sk': 27, 'long_sks': 79, 'long_sd': 23, 'long_lev': 3},
+    {'symbol': 'KNCUSDT', 'short_ma': 189, 'short_sk': 52, 'short_sks': 27, 'short_sd': 19, 'long_ma': 153, 'long_sk': 55, 'long_sks': 59, 'long_sd': 49, 'long_lev': 1},
+    {'symbol': '1INCHUSDT', 'short_ma': 240, 'short_sk': 83, 'short_sks': 28, 'short_sd': 14, 'long_ma': 174, 'long_sk': 137, 'long_sks': 9, 'long_sd': 19, 'long_lev': 1},
+    {'symbol': 'MASKUSDT', 'short_ma': 350, 'short_sk': 150, 'short_sks': 67, 'short_sd': 30, 'long_ma': 272, 'long_sk': 130, 'long_sks': 23, 'long_sd': 21, 'long_lev': 2},
+    {'symbol': 'QTUMUSDT', 'short_ma': 234, 'short_sk': 109, 'short_sks': 50, 'short_sd': 48, 'long_ma': 135, 'long_sk': 16, 'long_sks': 70, 'long_sd': 7, 'long_lev': 3},
+    {'symbol': 'TRBUSDT', 'short_ma': 239, 'short_sk': 114, 'short_sks': 28, 'short_sd': 48, 'long_ma': 171, 'long_sk': 95, 'long_sks': 66, 'long_sd': 17, 'long_lev': 2},
+    {'symbol': 'THETAUSDT', 'short_ma': 336, 'short_sk': 117, 'short_sks': 72, 'short_sd': 27, 'long_ma': 67, 'long_sk': 117, 'long_sks': 13, 'long_sd': 36, 'long_lev': 3},
+    {'symbol': 'ETCUSDT', 'short_ma': 339, 'short_sk': 134, 'short_sks': 43, 'short_sd': 26, 'long_ma': 96, 'long_sk': 124, 'long_sks': 6, 'long_sd': 5, 'long_lev': 2},
+    {'symbol': 'DOTUSDT', 'short_ma': 139, 'short_sk': 32, 'short_sks': 79, 'short_sd': 15, 'long_ma': 123, 'long_sk': 23, 'long_sks': 80, 'long_sd': 27, 'long_lev': 4},
+    {'symbol': 'STORJUSDT', 'short_ma': 114, 'short_sk': 51, 'short_sks': 34, 'short_sd': 33, 'long_ma': 64, 'long_sk': 58, 'long_sks': 22, 'long_sd': 14, 'long_lev': 1},
+    {'symbol': 'ICPUSDT', 'short_ma': 297, 'short_sk': 150, 'short_sks': 60, 'short_sd': 13, 'long_ma': 56, 'long_sk': 129, 'long_sks': 57, 'long_sd': 15, 'long_lev': 4},
+    {'symbol': 'LQTYUSDT', 'short_ma': 80, 'short_sk': 75, 'short_sks': 59, 'short_sd': 30, 'long_ma': 286, 'long_sk': 78, 'long_sks': 21, 'long_sd': 19, 'long_lev': 2},
+    {'symbol': 'DUSKUSDT', 'short_ma': 108, 'short_sk': 109, 'short_sks': 64, 'short_sd': 38, 'long_ma': 37, 'long_sk': 26, 'long_sks': 35, 'long_sd': 38, 'long_lev': 3},
+    {'symbol': 'ACHUSDT', 'short_ma': 157, 'short_sk': 149, 'short_sks': 78, 'short_sd': 47, 'long_ma': 73, 'long_sk': 31, 'long_sks': 20, 'long_sd': 30, 'long_lev': 4},
+    {'symbol': 'AAVEUSDT', 'short_ma': 153, 'short_sk': 97, 'short_sks': 65, 'short_sd': 50, 'long_ma': 154, 'long_sk': 24, 'long_sks': 37, 'long_sd': 40, 'long_lev': 1},
+    {'symbol': 'XLMUSDT', 'short_ma': 335, 'short_sk': 84, 'short_sks': 74, 'short_sd': 50, 'long_ma': 78, 'long_sk': 39, 'long_sks': 30, 'long_sd': 11, 'long_lev': 3},
+    {'symbol': 'COMPUSDT', 'short_ma': 314, 'short_sk': 94, 'short_sks': 38, 'short_sd': 18, 'long_ma': 111, 'long_sk': 36, 'long_sks': 58, 'long_sd': 24, 'long_lev': 2},
+    {'symbol': 'STGUSDT', 'short_ma': 59, 'short_sk': 91, 'short_sks': 49, 'short_sd': 5, 'long_ma': 80, 'long_sk': 19, 'long_sks': 26, 'long_sd': 34, 'long_lev': 3},
+    {'symbol': 'BELUSDT', 'short_ma': 221, 'short_sk': 146, 'short_sks': 10, 'short_sd': 12, 'long_ma': 111, 'long_sk': 148, 'long_sks': 6, 'long_sd': 5, 'long_lev': 1},
+    {'symbol': 'JASMYUSDT', 'short_ma': 279, 'short_sk': 112, 'short_sks': 70, 'short_sd': 49, 'long_ma': 269, 'long_sk': 18, 'long_sks': 14, 'long_sd': 28, 'long_lev': 4},
+    {'symbol': 'GRTUSDT', 'short_ma': 350, 'short_sk': 122, 'short_sks': 80, 'short_sd': 33, 'long_ma': 350, 'long_sk': 101, 'long_sks': 19, 'long_sd': 7, 'long_lev': 2},
+    {'symbol': 'ATOMUSDT', 'short_ma': 62, 'short_sk': 103, 'short_sks': 31, 'short_sd': 36, 'long_ma': 82, 'long_sk': 47, 'long_sks': 53, 'long_sd': 13, 'long_lev': 3},
+    {'symbol': 'SCRTUSDT', 'short_ma': 66, 'short_sk': 100, 'short_sks': 7, 'short_sd': 15, 'long_ma': 278, 'long_sk': 140, 'long_sks': 23, 'long_sd': 23, 'long_lev': 4},
+    {'symbol': 'TLMUSDT', 'short_ma': 69, 'short_sk': 17, 'short_sks': 35, 'short_sd': 3, 'long_ma': 281, 'long_sk': 128, 'long_sks': 61, 'long_sd': 19, 'long_lev': 2},
+    {'symbol': '1000RATSUSDT', 'short_ma': 28, 'short_sk': 149, 'short_sks': 78, 'short_sd': 16, 'long_ma': 25, 'long_sk': 14, 'long_sks': 54, 'long_sd': 25, 'long_lev': 1},
+    {'symbol': 'CHZUSDT', 'short_ma': 102, 'short_sk': 47, 'short_sks': 22, 'short_sd': 19, 'long_ma': 129, 'long_sk': 90, 'long_sks': 79, 'long_sd': 25, 'long_lev': 3},
+    {'symbol': 'ZENUSDT', 'short_ma': 190, 'short_sk': 89, 'short_sks': 8, 'short_sd': 22, 'long_ma': 200, 'long_sk': 22, 'long_sks': 25, 'long_sd': 27, 'long_lev': 1},
+    {'symbol': 'CHRUSDT', 'short_ma': 59, 'short_sk': 46, 'short_sks': 7, 'short_sd': 4, 'long_ma': 143, 'long_sk': 44, 'long_sks': 16, 'long_sd': 50, 'long_lev': 1},
+    {'symbol': 'INJUSDT', 'short_ma': 157, 'short_sk': 141, 'short_sks': 76, 'short_sd': 50, 'long_ma': 265, 'long_sk': 135, 'long_sks': 34, 'long_sd': 44, 'long_lev': 5},
+    {'symbol': 'SSVUSDT', 'short_ma': 267, 'short_sk': 74, 'short_sks': 76, 'short_sd': 48, 'long_ma': 203, 'long_sk': 136, 'long_sks': 17, 'long_sd': 13, 'long_lev': 1},
+    {'symbol': 'ZECUSDT', 'short_ma': 175, 'short_sk': 25, 'short_sks': 36, 'short_sd': 39, 'long_ma': 268, 'long_sk': 85, 'long_sks': 37, 'long_sd': 8, 'long_lev': 2},
+    {'symbol': 'CRVUSDT', 'short_ma': 327, 'short_sk': 65, 'short_sks': 68, 'short_sd': 4, 'long_ma': 223, 'long_sk': 14, 'long_sks': 7, 'long_sd': 27, 'long_lev': 2},
 ]
 
 # Futures 롱 매매 제외 코인 (CSV 필터링 완료 - 별도 제외 불필요)
 LONG_EXCLUDED_COINS = []
+
+# ============================================================
+# 코인별 우선순위 설정 (롱/숏 우선 최적화 결과)
+# 'long': 롱 우선 (롱 신호 먼저 확인)
+# 'short': 숏 우선 (숏 신호 먼저 확인, 기본값)
+# ============================================================
+
+COIN_PRIORITY = {
+    'BTCUSDT': 'long',
+    'ETHUSDT': 'short',
+    'XRPUSDT': 'short',
+    'SOLUSDT': 'long',
+    'DOGEUSDT': 'long',
+    'ADAUSDT': 'long',
+    'SUSDT': 'short',
+    'SOLVUSDT': 'long',
+    'RAYSOLUSDT': 'long',
+    'BERAUSDT': 'short',
+    'DUSDT': 'long',
+    'CGPTUSDT': 'long',
+    '1000000MOGUSDT': 'short',
+    'VELODROMEUSDT': 'short',
+    'PENGUUSDT': 'short',
+    'AIXBTUSDT': 'short',
+    'MEUSDT': 'long',
+    'SONICUSDT': 'long',
+    'AEROUSDT': 'long',
+    'FARTCOINUSDT': 'short',
+    'CETUSUSDT': 'short',
+    'VTHOUSDT': 'long',
+    'PNUTUSDT': 'long',
+    'VINEUSDT': 'short',
+    'MOVEUSDT': 'long',
+    'MEWUSDT': 'short',
+    'PHAUSDT': 'long',
+    'VIRTUALUSDT': 'long',
+    'TRUMPUSDT': 'long',
+    '1000CATUSDT': 'short',
+    'ZKUSDT': 'short',
+    'DEXEUSDT': 'long',
+    'GOATUSDT': 'short',
+    'EIGENUSDT': 'short',
+    'VANRYUSDT': 'short',
+    'COOKIEUSDT': 'short',
+    'BOMEUSDT': 'long',
+    'SWARMSUSDT': 'short',
+    'SYNUSDT': 'short',
+    'DEGENUSDT': 'long',
+    'HIVEUSDT': 'short',
+    'BIOUSDT': 'long',
+    '1MBABYDOGEUSDT': 'long',
+    'ACXUSDT': 'short',
+    'SYSUSDT': 'long',
+    'VVVUSDT': 'long',
+    'HMSTRUSDT': 'short',
+    'NOTUSDT': 'short',
+    'GRIFFAINUSDT': 'long',
+    'KOMAUSDT': 'short',
+    'AVAAIUSDT': 'short',
+    'VANAUSDT': 'short',
+    'SAGAUSDT': 'short',
+    'PIXELUSDT': 'short',
+    'PROMUSDT': 'long',
+    'DRIFTUSDT': 'short',
+    'BRETTUSDT': 'short',
+    'POLUSDT': 'long',
+    'AKTUSDT': 'long',
+    'SCRUSDT': 'long',
+    'KAIAUSDT': 'short',
+    'SPXUSDT': 'short',
+    'FIDAUSDT': 'short',
+    'RPLUSDT': 'short',
+    'ANIMEUSDT': 'short',
+    'TURBOUSDT': 'long',
+    'KMNOUSDT': 'short',
+    'ENAUSDT': 'long',
+    'PIPPINUSDT': 'short',
+    'POPCATUSDT': 'long',
+    'ACTUSDT': 'long',
+    'NFPUSDT': 'short',
+    'ZETAUSDT': 'short',
+    'MOCAUSDT': 'long',
+    'AEVOUSDT': 'long',
+    'USUALUSDT': 'short',
+    'IOUSDT': 'short',
+    'GRASSUSDT': 'long',
+    'RAREUSDT': 'short',
+    'HIPPOUSDT': 'short',
+    'ALTUSDT': 'long',
+    'PORTALUSDT': 'long',
+    'ORCAUSDT': 'short',
+    'MBOXUSDT': 'short',
+    'BANANAUSDT': 'long',
+    'RONINUSDT': 'long',
+    'RENDERUSDT': 'long',
+    'NTRNUSDT': 'short',
+    'AIUSDT': 'short',
+    'WUSDT': 'short',
+    'DYMUSDT': 'short',
+    '1000WHYUSDT': 'long',
+    'BLURUSDT': 'short',
+    'LSKUSDT': 'long',
+    'CHILLGUYUSDT': 'short',
+    'BBUSDT': 'short',
+    'GUSDT': 'short',
+    'WIFUSDT': 'long',
+    '1000CHEEMSUSDT': 'long',
+    'FLUXUSDT': 'short',
+    'DIAUSDT': 'short',
+    'METISUSDT': 'short',
+    'BICOUSDT': 'short',
+    'STRKUSDT': 'short',
+    'PYTHUSDT': 'short',
+    'COSUSDT': 'short',
+    'ETHWUSDT': 'short',
+    'TNSRUSDT': 'long',
+    'MEMEUSDT': 'long',
+    'LUMIAUSDT': 'short',
+    'SEIUSDT': 'short',
+    'REZUSDT': 'short',
+    'CATIUSDT': 'short',
+    'MOVRUSDT': 'short',
+    'BIGTIMEUSDT': 'short',
+    'AVAUSDT': 'long',
+    'MELANIAUSDT': 'short',
+    'MOODENGUSDT': 'long',
+    'NEIROUSDT': 'long',
+    'POLYXUSDT': 'short',
+    'IDUSDT': 'long',
+    'TONUSDT': 'short',
+    'SAFEUSDT': 'long',
+    'WAXPUSDT': 'short',
+    'XAIUSDT': 'short',
+    'ILVUSDT': 'short',
+    'HFTUSDT': 'short',
+    '1000FLOKIUSDT': 'short',
+    'STEEMUSDT': 'long',
+    'ACEUSDT': 'long',
+    'ARKMUSDT': 'short',
+    'CAKEUSDT': 'short',
+    'ETHFIUSDT': 'short',
+    'ARBUSDT': 'long',
+    'BEAMXUSDT': 'long',
+    'THEUSDT': 'short',
+    '1000BONKUSDT': 'long',
+    'DOGSUSDT': 'long',
+    'CYBERUSDT': 'short',
+    'LISTAUSDT': 'short',
+    'BNTUSDT': 'short',
+    'RIFUSDT': 'short',
+    'FLOWUSDT': 'long',
+    'POWRUSDT': 'short',
+    'SUIUSDT': 'short',
+    'ORDIUSDT': 'long',
+    'APEUSDT': 'short',
+    'USTCUSDT': 'long',
+    'COWUSDT': 'long',
+    'MANAUSDT': 'short',
+    'YGGUSDT': 'long',
+    'HIGHUSDT': 'long',
+    'ONDOUSDT': 'short',
+    'SUNUSDT': 'long',
+    'LUNA2USDT': 'short',
+    'ZROUSDT': 'long',
+    'MAVUSDT': 'short',
+    'MAGICUSDT': 'short',
+    'AXLUSDT': 'long',
+    '1000PEPEUSDT': 'short',
+    'GALAUSDT': 'short',
+    'ONEUSDT': 'short',
+    'JTOUSDT': 'long',
+    'AUCTIONUSDT': 'short',
+    'ALCHUSDT': 'long',
+    'GMTUSDT': 'short',
+    'OGNUSDT': 'long',
+    'WLDUSDT': 'long',
+    'RDNTUSDT': 'long',
+    'TIAUSDT': 'long',
+    'ZEREBROUSDT': 'short',
+    'JOEUSDT': 'short',
+    'SANDUSDT': 'long',
+    'AGLDUSDT': 'short',
+    'KASUSDT': 'short',
+    'OPUSDT': 'short',
+    'MANTAUSDT': 'short',
+    'PENDLEUSDT': 'short',
+    'STXUSDT': 'long',
+    'HBARUSDT': 'short',
+    'ICXUSDT': 'short',
+    'MINAUSDT': 'short',
+    'BSVUSDT': 'short',
+    '1000LUNCUSDT': 'short',
+    'CKBUSDT': 'long',
+    'FETUSDT': 'short',
+    'PHBUSDT': 'short',
+    'SANTOSUSDT': 'short',
+    'SUSHIUSDT': 'short',
+    'EDUUSDT': 'long',
+    'JUPUSDT': 'long',
+    '1000SATSUSDT': 'long',
+    'ONGUSDT': 'short',
+    'IMXUSDT': 'short',
+    'AXSUSDT': 'long',
+    'MORPHOUSDT': 'long',
+    'WOOUSDT': 'long',
+    'API3USDT': 'short',
+    '1000XECUSDT': 'short',
+    'SKLUSDT': 'long',
+    'C98USDT': 'short',
+    'IOSTUSDT': 'short',
+    'CTSIUSDT': 'short',
+    'ENJUSDT': 'long',
+    'CFXUSDT': 'short',
+    'IOTXUSDT': 'short',
+    'VETUSDT': 'long',
+    '1000SHIBUSDT': 'long',
+    'XVGUSDT': 'long',
+    'GLMUSDT': 'long',
+    'ANKRUSDT': 'long',
+    'RVNUSDT': 'short',
+    'ROSEUSDT': 'short',
+    'AVAXUSDT': 'long',
+    'KSMUSDT': 'long',
+    'HOTUSDT': 'short',
+    'ENSUSDT': 'short',
+    'TUSDT': 'long',
+    'IOTAUSDT': 'long',
+    'GTCUSDT': 'short',
+    'NEARUSDT': 'short',
+    'TWTUSDT': 'short',
+    'SPELLUSDT': 'short',
+    'RSRUSDT': 'short',
+    'FILUSDT': 'long',
+    'TRUUSDT': 'short',
+    'GASUSDT': 'short',
+    'SNXUSDT': 'short',
+    'SUPERUSDT': 'long',
+    'LDOUSDT': 'long',
+    'GMXUSDT': 'short',
+    'ZRXUSDT': 'short',
+    'ATAUSDT': 'short',
+    'XVSUSDT': 'long',
+    'LPTUSDT': 'long',
+    'EGLDUSDT': 'long',
+    'CELOUSDT': 'short',
+    'NMRUSDT': 'short',
+    'DYDXUSDT': 'long',
+    'QNTUSDT': 'long',
+    'ARKUSDT': 'long',
+    'RUNEUSDT': 'long',
+    'APTUSDT': 'short',
+    'XTZUSDT': 'short',
+    'ARCUSDT': 'long',
+    'ZILUSDT': 'long',
+    'ARUSDT': 'short',
+    'YFIUSDT': 'short',
+    'ALGOUSDT': 'short',
+    'DODOXUSDT': 'short',
+    'ONTUSDT': 'long',
+    'TAOUSDT': 'long',
+    'ALICEUSDT': 'long',
+    'LRCUSDT': 'long',
+    'NEOUSDT': 'short',
+    'KNCUSDT': 'long',
+    '1INCHUSDT': 'long',
+    'MASKUSDT': 'short',
+    'QTUMUSDT': 'short',
+    'TRBUSDT': 'long',
+    'THETAUSDT': 'short',
+    'ETCUSDT': 'short',
+    'DOTUSDT': 'long',
+    'STORJUSDT': 'long',
+    'ICPUSDT': 'long',
+    'LQTYUSDT': 'long',
+    'DUSKUSDT': 'short',
+    'ACHUSDT': 'long',
+    'AAVEUSDT': 'short',
+    'XLMUSDT': 'short',
+    'COMPUSDT': 'short',
+    'STGUSDT': 'long',
+    'BELUSDT': 'short',
+    'JASMYUSDT': 'long',
+    'GRTUSDT': 'long',
+    'ATOMUSDT': 'short',
+    'SCRTUSDT': 'short',
+    'TLMUSDT': 'short',
+    '1000RATSUSDT': 'short',
+    'CHZUSDT': 'long',
+    'ZENUSDT': 'long',
+    'CHRUSDT': 'long',
+    'INJUSDT': 'short',
+    'SSVUSDT': 'long',
+    'ZECUSDT': 'long',
+    'CRVUSDT': 'long',
+}
+
+
 
 # Futures 전체 거래 코인 수 (숏 코인 수 기준 - 숏/롱 슬롯 공유)
 # 포지션 사이징: 총 자산 / 숏 코인 수(289)로 균등 배분
@@ -752,10 +1103,18 @@ def send_trade_summary(futures_open_list, futures_close_list,
     msg = f"📊 <b>Futures 거래 종합 리포트</b>\n"
     msg += f"━━━━━━━━━━━━━━━\n"
 
+    # 현재 포지션 현황
+    positions = get_all_futures_positions()
+    long_count = sum(1 for p in positions if p['side'] == 'long')
+    short_count = sum(1 for p in positions if p['side'] == 'short')
+    total_slots = get_effective_futures_coins()
+    cash_count = total_slots - long_count - short_count
+
     # Futures 자산
     msg += f"<b>📉📈 USDS-M Futures</b>\n"
     msg += f"💰 총 자산: <b>${futures_total:,.2f}</b>\n"
     msg += f"💵 USDT: ${futures_usdt:,.2f}\n"
+    msg += f"📊 포지션: 🟢롱 {long_count} | 🔴숏 {short_count} | ⬜현금 {cash_count} ({total_slots}슬롯)\n"
     msg += f"━━━━━━━━━━━━━━━\n"
 
     # Futures 숏 진입
@@ -943,6 +1302,43 @@ def get_futures_bnb_balance():
     except Exception as e:
         logging.error(f"Futures BNB 잔고 조회 중 오류: {e}")
         return {'balance': 0, 'free': 0, 'price': 0, 'value': 0}
+
+
+def check_and_refill_spot_usdt():
+    """Spot 지갑 USDT 자동 충전 (USDS-M Futures → Spot 전송)
+
+    Spot USDT 잔고가 SPOT_USDT_MIN_BALANCE 미만이면,
+    Futures 지갑 가용 USDT에서 SPOT_USDT_REFILL_AMOUNT 만큼을 Spot으로 전송합니다.
+    (BNB 자동 매수 시 Spot USDT가 필요하므로 수동 이체를 자동화)
+    """
+    try:
+        spot_usdt = get_usdt_balance()
+        logging.info(f"💵 Spot USDT 잔고: ${spot_usdt:,.2f}")
+
+        if spot_usdt >= SPOT_USDT_MIN_BALANCE:
+            return {'action': 'sufficient', 'balance': spot_usdt}
+
+        futures_bal = get_futures_balance()
+        if futures_bal['free'] < SPOT_USDT_REFILL_AMOUNT:
+            logging.warning(
+                f"⚠️ Futures 가용 USDT 부족(${futures_bal['free']:,.2f}) — "
+                f"Spot 충전(${SPOT_USDT_REFILL_AMOUNT}) 건너뜀"
+            )
+            return None
+
+        logging.info(
+            f"💸 Spot USDT 부족(${spot_usdt:,.2f} < ${SPOT_USDT_MIN_BALANCE}), "
+            f"Futures → Spot ${SPOT_USDT_REFILL_AMOUNT} 전송 시작..."
+        )
+        futures_exchange.transfer('USDT', SPOT_USDT_REFILL_AMOUNT, 'future', 'spot')
+        time.sleep(1)
+
+        new_spot_usdt = get_usdt_balance()
+        logging.info(f"✅ Spot USDT 충전 완료: ${new_spot_usdt:,.2f}")
+        return {'action': 'refilled', 'new_balance': new_spot_usdt}
+    except Exception as e:
+        logging.error(f"❌ Spot USDT 자동 충전 실패: {e}")
+        return None
 
 
 def check_and_recharge_futures_bnb():
@@ -1155,7 +1551,7 @@ def _safe_float(value, default=0):
         return default
 
 
-def _safe_int(value, default=1):
+def _safe_int(value, default=None):
     """None-safe int 변환"""
     if value is None:
         return default
@@ -1163,6 +1559,51 @@ def _safe_int(value, default=1):
         return int(value)
     except (ValueError, TypeError):
         return default
+
+
+def _first_positive_float(*values):
+    """여러 후보 값 중 첫 번째 양수 float 반환"""
+    for value in values:
+        parsed = _safe_float(value, default=None)
+        if parsed is not None and abs(parsed) > 0:
+            return abs(parsed)
+    return None
+
+
+def _extract_position_leverage(pos):
+    """CCXT/Binance 포지션 응답에서 레버리지를 최대한 정확히 추출.
+
+    Binance USDS-M positionRisk V3 응답은 leverage 필드가 빠질 수 있다.
+    이때 None을 1x로 취급하면 매 사이클 레버리지 변경으로 오인하므로,
+    raw info와 margin/notional 값으로 한 번 더 확인한다.
+    """
+    info = pos.get('info') if isinstance(pos.get('info'), dict) else {}
+
+    for value in (pos.get('leverage'), info.get('leverage')):
+        leverage = _safe_int(value, default=None)
+        if leverage is not None and leverage > 0:
+            return leverage
+
+    notional = _first_positive_float(
+        pos.get('notional'),
+        info.get('notional'),
+        info.get('notionalValue')
+    )
+    initial_margin = _first_positive_float(
+        info.get('positionInitialMargin'),
+        pos.get('initialMargin'),
+        info.get('initialMargin')
+    )
+    if notional and initial_margin:
+        inferred = notional / initial_margin
+        if inferred > 0:
+            return max(1, int(round(inferred)))
+
+    initial_margin_percentage = _safe_float(pos.get('initialMarginPercentage'), default=None)
+    if initial_margin_percentage and initial_margin_percentage > 0:
+        return max(1, int(round(1 / initial_margin_percentage)))
+
+    return None
 
 
 def get_futures_position(symbol):
@@ -1179,7 +1620,7 @@ def get_futures_position(symbol):
                     'notional': abs(_safe_float(pos.get('notional'))),
                     'unrealized_pnl': _safe_float(pos.get('unrealizedPnl')),
                     'entry_price': _safe_float(pos.get('entryPrice')),
-                    'leverage': _safe_int(pos.get('leverage')),
+                    'leverage': _extract_position_leverage(pos),
                     'liquidation_price': _safe_float(pos.get('liquidationPrice'))
                 }
         return None
@@ -1202,7 +1643,7 @@ def get_all_futures_positions():
                     'notional': abs(_safe_float(pos.get('notional'))),
                     'unrealized_pnl': _safe_float(pos.get('unrealizedPnl')),
                     'entry_price': _safe_float(pos.get('entryPrice')),
-                    'leverage': _safe_int(pos.get('leverage'))
+                    'leverage': _extract_position_leverage(pos)
                 })
         return active_positions
     except Exception as e:
@@ -1465,8 +1906,8 @@ def close_short_position(symbol, reason=None):
         entry_price = pos['entry_price']
         unrealized_pnl = pos['unrealized_pnl']
 
-        # 시장가 매수로 숏 청산
-        order = futures_exchange.create_market_buy_order(symbol, quantity)
+        # 시장가 매수로 숏 청산 (reduceOnly: $5 미만 포지션도 청산 가능)
+        order = futures_exchange.create_market_buy_order(symbol, quantity, params={'reduceOnly': True})
 
         current_price = get_futures_current_price(symbol)
 
@@ -1559,8 +2000,8 @@ def close_long_position(symbol, reason=None):
         entry_price = pos['entry_price']
         unrealized_pnl = pos['unrealized_pnl']
 
-        # 시장가 매도로 롱 청산
-        order = futures_exchange.create_market_sell_order(symbol, quantity)
+        # 시장가 매도로 롱 청산 (reduceOnly: $5 미만 포지션도 청산 가능)
+        order = futures_exchange.create_market_sell_order(symbol, quantity, params={'reduceOnly': True})
 
         current_price = get_futures_current_price(symbol)
 
@@ -1587,6 +2028,53 @@ def close_long_position(symbol, reason=None):
 # 메인 거래 전략
 # ============================================================
 
+def reenter_if_leverage_changed(symbol, pos, side, short_config, long_config):
+    """현재 포지션의 레버리지가 config 목표 레버리지와 다르면 청산 후 재진입.
+
+    Returns: (close_result, open_result) — 변경이 없었거나 실패했으면 (None, None)
+    Bitget 봇의 '레버리지 변경 → 청산 후 재진입' 동작과 동일.
+    """
+    if pos is None:
+        return None, None
+
+    if side == 'short':
+        cfg = short_config
+        target_lev = cfg['leverage'] if cfg else None
+    else:
+        cfg = long_config
+        target_lev = cfg['long_lev'] if cfg else None
+
+    if cfg is None or target_lev is None:
+        return None, None
+
+    curr_lev = pos.get('leverage', 0) or 0
+    if curr_lev <= 0 or curr_lev == target_lev:
+        return None, None
+
+    logging.info(
+        f"[{symbol}] 🔄 {side} 레버리지 변경 감지: {curr_lev}x → {target_lev}x "
+        f"(청산 후 재진입)"
+    )
+    reason = f"레버리지 변경 {curr_lev}x→{target_lev}x"
+    if side == 'short':
+        close_result = close_short_position(symbol, reason)
+    else:
+        close_result = close_long_position(symbol, reason)
+
+    if not close_result:
+        logging.warning(f"[{symbol}] 레버리지 변경 청산 실패 — 재진입 건너뜀")
+        return None, None
+
+    time.sleep(1)  # 포지션 반영 대기
+
+    if side == 'short':
+        open_result = open_short_position(cfg)
+    else:
+        open_result = open_long_position(cfg)
+
+    return close_result, open_result
+
+
 def futures_trade_strategy():
     """Futures 숏+롱 거래 전략"""
     global futures_exchange
@@ -1602,6 +2090,9 @@ def futures_trade_strategy():
                 return short_open_list, short_close_list, long_open_list, long_close_list, errors
 
         logging.info("✅ Futures API 연결 정상")
+
+        # Spot USDT 자동 충전 (Futures → Spot, BNB 매수 선행 조건)
+        check_and_refill_spot_usdt()
 
         # Futures BNB 자동 충전
         check_and_recharge_futures_bnb()
@@ -1706,59 +2197,127 @@ def futures_trade_strategy():
                         long_stoch_cond = long_stoch_data.get('long_signal', False)
                         long_signal_active = long_ma_cond and long_stoch_cond
 
-                        final_long_condition = (not short_filter_active) and long_signal_active
+                        # priority 로직이 롱/숏 우선순위를 처리하므로 short_filter 제거
+                        # (우선순위와 short_filter 충돌로 priority='long' 코인이 숏 진입하는 문제 해결)
+                        final_long_condition = long_signal_active
 
-                        logging.info(f"[롱][{symbol}] 현재가: ${current_price:.4f}, Short MA{short_ma_period}: ${short_ma_price:.4f}, Long MA{long_ma_period}: ${long_ma_price:.4f}")
+                        logging.info(f"[롱][{symbol}] 현재가: ${current_price:.4f}, Long MA{long_ma_period}: ${long_ma_price:.4f}")
                         if long_stoch_data:
-                            sk = long_stoch_data.get('short_slow_k', 0)
-                            sd = long_stoch_data.get('short_slow_d', 0)
                             lk = long_stoch_data.get('long_slow_k', 0)
                             ld = long_stoch_data.get('long_slow_d', 0)
-                            logging.info(f"[롱][{symbol}] ShortFilter K:{sk:.2f}/D:{sd:.2f}, LongSignal K:{lk:.2f}/D:{ld:.2f}")
-                        logging.info(f"[롱][{symbol}] ShortFilter:{short_filter_active}, LongSignal:{long_signal_active} → 진입:{final_long_condition}")
+                            logging.info(f"[롱][{symbol}] LongSignal K:{lk:.2f}/D:{ld:.2f}")
+                        logging.info(f"[롱][{symbol}] LongSignal:{long_signal_active} → 진입:{final_long_condition}")
 
-                # ── 의사결정 (숏 우선) ──
-                if final_short_condition:
-                    # 숏 신호 ON
-                    if current_side == 'short':
-                        logging.info(f"[{symbol}] ➡️ 숏 포지션 유지")
-                    elif current_side == 'long':
-                        # 롱 청산 → 숏 진입
-                        logging.info(f"[{symbol}] 🔄 롱→숏 전환: 롱 청산 후 숏 진입")
-                        close_result = close_long_position(symbol, "숏 신호 발생 - 포지션 전환")
-                        if close_result:
-                            long_close_list.append(close_result)
-                        open_result = open_short_position(short_config)
-                        if open_result:
-                            short_open_list.append(open_result)
-                            active_position_map[symbol] = 'short'
-                    else:
-                        # 현금 → 숏 진입
-                        result = open_short_position(short_config)
-                        if result:
-                            short_open_list.append(result)
-                            active_position_map[symbol] = 'short'
+                # ── 의사결정 (코인별 우선순위 적용) ──
+                coin_priority = COIN_PRIORITY.get(symbol, 'short')
 
-                elif final_long_condition:
-                    # 롱 신호 ON (숏 신호 OFF)
-                    if current_side == 'long':
-                        logging.info(f"[{symbol}] ➡️ 롱 포지션 유지")
-                    elif current_side == 'short':
-                        # 숏 청산 → 롱 진입
-                        logging.info(f"[{symbol}] 🔄 숏→롱 전환: 숏 청산 후 롱 진입")
-                        close_result = close_short_position(symbol, "롱 신호 발생 - 포지션 전환")
-                        if close_result:
-                            short_close_list.append(close_result)
-                        open_result = open_long_position(long_config)
-                        if open_result:
-                            long_open_list.append(open_result)
-                            active_position_map[symbol] = 'long'
+                # 우선순위에 따라 1차/2차 조건 결정
+                if coin_priority == 'long':
+                    first_condition = final_long_condition
+                    second_condition = final_short_condition
+                    first_side = 'long'
+                    second_side = 'short'
+                else:
+                    first_condition = final_short_condition
+                    second_condition = final_long_condition
+                    first_side = 'short'
+                    second_side = 'long'
+
+                if first_condition:
+                    # 1차 우선 신호 ON
+                    if current_side == first_side:
+                        # 레버리지 변경 감지 시 청산 → 재진입
+                        close_r, open_r = reenter_if_leverage_changed(
+                            symbol, pos, first_side, short_config, long_config
+                        )
+                        if close_r:
+                            (short_close_list if first_side == 'short' else long_close_list).append(close_r)
+                        if open_r:
+                            (short_open_list if first_side == 'short' else long_open_list).append(open_r)
+                            active_position_map[symbol] = first_side
+                        if not close_r:
+                            logging.info(f"[{symbol}] ➡️ {first_side} 포지션 유지 ({coin_priority}우선)")
+                    elif current_side == second_side:
+                        # 반대 포지션 청산 → 우선 포지션 진입
+                        logging.info(f"[{symbol}] 🔄 {second_side}→{first_side} 전환 ({coin_priority}우선)")
+                        if second_side == 'long':
+                            close_result = close_long_position(symbol, f"{first_side} 신호 발생 - 포지션 전환")
+                            if close_result:
+                                long_close_list.append(close_result)
+                        else:
+                            close_result = close_short_position(symbol, f"{first_side} 신호 발생 - 포지션 전환")
+                            if close_result:
+                                short_close_list.append(close_result)
+                        if first_side == 'short':
+                            open_result = open_short_position(short_config)
+                            if open_result:
+                                short_open_list.append(open_result)
+                                active_position_map[symbol] = 'short'
+                        else:
+                            open_result = open_long_position(long_config)
+                            if open_result:
+                                long_open_list.append(open_result)
+                                active_position_map[symbol] = 'long'
                     else:
-                        # 현금 → 롱 진입
-                        result = open_long_position(long_config)
-                        if result:
-                            long_open_list.append(result)
-                            active_position_map[symbol] = 'long'
+                        # 현금 → 우선 포지션 진입
+                        if first_side == 'short':
+                            result = open_short_position(short_config)
+                            if result:
+                                short_open_list.append(result)
+                                active_position_map[symbol] = 'short'
+                        else:
+                            result = open_long_position(long_config)
+                            if result:
+                                long_open_list.append(result)
+                                active_position_map[symbol] = 'long'
+
+                elif second_condition:
+                    # 2차 신호 ON (1차 신호 OFF)
+                    if current_side == second_side:
+                        # 레버리지 변경 감지 시 청산 → 재진입
+                        close_r, open_r = reenter_if_leverage_changed(
+                            symbol, pos, second_side, short_config, long_config
+                        )
+                        if close_r:
+                            (short_close_list if second_side == 'short' else long_close_list).append(close_r)
+                        if open_r:
+                            (short_open_list if second_side == 'short' else long_open_list).append(open_r)
+                            active_position_map[symbol] = second_side
+                        if not close_r:
+                            logging.info(f"[{symbol}] ➡️ {second_side} 포지션 유지 ({coin_priority}우선)")
+                    elif current_side == first_side:
+                        # 우선 포지션 청산 → 2차 포지션 진입
+                        logging.info(f"[{symbol}] 🔄 {first_side}→{second_side} 전환 ({coin_priority}우선)")
+                        if first_side == 'long':
+                            close_result = close_long_position(symbol, f"{second_side} 신호 발생 - 포지션 전환")
+                            if close_result:
+                                long_close_list.append(close_result)
+                        else:
+                            close_result = close_short_position(symbol, f"{second_side} 신호 발생 - 포지션 전환")
+                            if close_result:
+                                short_close_list.append(close_result)
+                        if second_side == 'short':
+                            open_result = open_short_position(short_config)
+                            if open_result:
+                                short_open_list.append(open_result)
+                                active_position_map[symbol] = 'short'
+                        else:
+                            open_result = open_long_position(long_config)
+                            if open_result:
+                                long_open_list.append(open_result)
+                                active_position_map[symbol] = 'long'
+                    else:
+                        # 현금 → 2차 포지션 진입
+                        if second_side == 'short':
+                            result = open_short_position(short_config)
+                            if result:
+                                short_open_list.append(result)
+                                active_position_map[symbol] = 'short'
+                        else:
+                            result = open_long_position(long_config)
+                            if result:
+                                long_open_list.append(result)
+                                active_position_map[symbol] = 'long'
 
                 else:
                     # 둘 다 OFF → 기존 포지션 청산
@@ -1770,10 +2329,7 @@ def futures_trade_strategy():
                             if symbol in active_position_map:
                                 del active_position_map[symbol]
                     elif current_side == 'long':
-                        if short_filter_active:
-                            reason = "숏 필터 활성 (하락 추세)"
-                        else:
-                            reason = "롱 신호 미충족"
+                        reason = "롱 신호 미충족"
                         result = close_long_position(symbol, reason)
                         if result:
                             long_close_list.append(result)
@@ -1826,14 +2382,16 @@ def trade_strategy():
 
 def log_strategy_info():
     logging.info("=" * 80)
-    logging.info("🤖 바이낸스 Futures 자동매매 봇 v5.0.0 (USDS-M Futures 숏/롱 전용)")
+    logging.info("🤖 바이낸스 Futures 자동매매 봇 v6.0.0 (코인별 롱/숏 우선순위)")
     logging.info("=" * 80)
     logging.info("📉 Futures 숏: 현재가 < MA(4H) AND Slow %K < Slow %D (1D)")
-    logging.info("📉 Futures 숏 청산: 숏 조건 미충족")
     logging.info("📈 Futures 롱: NOT 숏필터 AND (현재가 > MA AND K > D)")
-    logging.info("📈 Futures 롱 청산: 숏필터 활성 OR 롱 신호 미충족")
+    logging.info("🔄 코인별 우선순위: 롱우선 코인은 롱→숏 순, 숏우선 코인은 숏→롱 순 확인")
+    long_priority_count = sum(1 for v in COIN_PRIORITY.values() if v == 'long')
+    short_priority_count = sum(1 for v in COIN_PRIORITY.values() if v == 'short')
     logging.info(f"🔻 Futures 숏 대상: {len(SHORT_TRADING_CONFIGS)}개 코인")
     logging.info(f"🟢 Futures 롱 대상: {len(LONG_TRADING_CONFIGS)}개 코인")
+    logging.info(f"🔄 우선순위: 롱우선 {long_priority_count}개, 숏우선 {short_priority_count}개")
     logging.info(f"📊 Futures 총 슬롯: {get_effective_futures_coins()}개 (제외 {TOTAL_FUTURES_COINS - get_effective_futures_coins()}개)")
     logging.info(f"🔶 Futures BNB 자동충전: ${FUTURES_BNB_MIN_BALANCE} 이하시 ${FUTURES_BNB_RECHARGE_AMOUNT} 매수")
     logging.info("=" * 80)
