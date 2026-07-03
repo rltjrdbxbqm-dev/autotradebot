@@ -1,5 +1,5 @@
 {
- "updated": "2026-07-03 13:59:08",
+ "updated": "2026-07-04 05:00:13",
  "strategy": "TQQQ Sniper v2.0 (ENS6+VT, G10B10)",
  "records": [
   {
@@ -16,7 +16,7 @@
    "vt_mult": 0.59,
    "realized_vol_pct": 101.9,
    "share_change_pct": null,
-   "warning": null,
+   "warning": "마지막 봉 2026-07-02 — 어제 미국 휴장이었다면 정상, 아니라면 데이터 1일 지연 (신호는 전일 기준)",
    "state_warning": null,
    "pension_position": "QQQ",
    "pension_gap_pct": 12.4,
