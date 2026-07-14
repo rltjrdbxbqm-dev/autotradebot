@@ -1,7 +1,31 @@
 {
- "updated": "2026-07-14 21:16:37",
+ "updated": "2026-07-15 05:00:12",
  "strategy": "TQQQ Sniper v2.0 (ENS6+VT, G10B10)",
  "records": [
+  {
+   "date": "2026-07-14",
+   "price": 75.02,
+   "change_pct": 3.28,
+   "action": "HOLD",
+   "held_pct": 51,
+   "state_held_pct": 50,
+   "actual_held_pct": 50.8,
+   "new_held_pct": 50,
+   "target_pct": 45.0,
+   "ens_mean_pct": 62.5,
+   "vt_mult": 0.72,
+   "realized_vol_pct": 83.3,
+   "share_change_pct": null,
+   "warning": null,
+   "state_warning": null,
+   "pension_position": "QQQ",
+   "pension_position_basis": "delivered_recommendation_not_execution",
+   "pension_signal_month": "2026-06",
+   "pension_signal_date": "2026-06-30",
+   "pension_gap_pct": 16.3,
+   "pension_changed": false,
+   "pension_decided_today": false
+  },
   {
    "date": "2026-07-13",
    "price": 72.64,
